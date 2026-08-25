@@ -25,7 +25,19 @@ USDA AgTransport API
 
 **Selected source:** [Refrigerated Truck Rates and Availability](https://agtransport.usda.gov/Truck/Refrigerated-Truck-Rates-and-Availability/acar-e3r8) (`acar-e3r8`).
 
-This is the official weekly historical origin–destination series (rates, distance, availability, commodity) on USDA’s Agricultural Transportation Open Data platform. We prefer it over the quarterly aggregate O-D dataset (`qm5q-5r5f`) because it is more granular in time.
+This is the official weekly historical origin–destination series (rates, distance, availability, commodity) on USDA’s [Agricultural Transportation Open Data](https://agtransport.usda.gov/) platform. We prefer it over the quarterly aggregate O-D dataset ([`qm5q-5r5f`](https://agtransport.usda.gov/Truck/Quarterly-Refrigerated-Truck-Rates-by-Origin-Desti/qm5q-5r5f)) because it is more granular in time.
+
+### Scope: 10 USDA destination markets
+
+This project focuses on **weekly refrigerated truck rates from U.S. agricultural shipping areas to ten fixed wholesale destination markets** defined by USDA AMS methodology — not general freight to arbitrary U.S. cities.
+
+USDA publishes rate data for **10 destination markets**, which are used to compute regional and national specialty-crop truck rates. See the [Agricultural Refrigerated Truck Quarterly Datasets](https://www.ams.usda.gov/services/transportation-analysis/agricultural-refrigerated-truck-quarterly-datasets) documentation:
+
+> *"Rate data for **10 destination markets** are used to calculate average origin regional rates."*
+
+Those destinations in our snapshot are: Atlanta, Baltimore, Boston, Chicago, Dallas, Los Angeles, Miami, New York, Philadelphia, and Seattle. **Origin districts (~107)** and **lanes (~800)** provide most of the cross-sectional variation; cold-start experiments target sparse or newly observed **lanes**, not new destination cities.
+
+The curated modeling population is the **lane-week panel** (`date + origin + destination`), built from the raw snapshot via `build_lane_week_panel()` — one row per lane-week, with `rpm` aggregated by mean when reporting duplicates exist.
 
 ## Setup
 
