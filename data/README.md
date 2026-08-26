@@ -5,33 +5,39 @@
 **Dataset:** Refrigerated Truck Rates and Availability  
 **Platform:** [USDA Agricultural Transportation Open Data](https://agtransport.usda.gov/)  
 **Dataset ID:** `acar-e3r8`  
-**Catalog page:** https://agtransport.usda.gov/Truck/Refrigerated-Truck-Rates-and-Availability/acar-e3r8  
-**API endpoint:** `https://agtransport.usda.gov/resource/acar-e3r8.json`
+**Catalog:** https://agtransport.usda.gov/Truck/Refrigerated-Truck-Rates-and-Availability/acar-e3r8  
+**API:** `https://agtransport.usda.gov/resource/acar-e3r8.json`
 
-Weekly historical refrigerated truck rates and availability by origin, destination, and commodity (AMS Specialty Crops Market News), with region assigned by AMS Transportation Services Division.
+Weekly refrigerated truck rates by origin, destination, and commodity (AMS FVWTRK).
 
-### Why this dataset
+**Diesel:** [Weekly On-Highway Diesel](https://agtransport.usda.gov/Fuel/Weekly-On-Highway-Diesel-Fuel-Prices/x88w-atzp) (`x88w-atzp`), merged Case-B as-of in the modeling panel.
 
-| Dataset | ID | Granularity | Notes |
-|---------|----|-------------|-------|
-| **Refrigerated Truck Rates and Availability** | `acar-e3r8` | **Weekly**, origin–destination | Selected: most granular historical O-D series |
-| Latest week only | `25pi-t6xr` | Single week | Not useful for history |
-| Average weekly regional rates by distance | `c69n-pfv3` | Weekly, regional | No lane-level O-D |
-| Quarterly rates by O-D pair | `qm5q-5r5f` | Quarterly | Aggregate; avoided unless weekly is unavailable |
+## Download
 
-## Regenerating data
-
-From the repository root (with the package installed):
+From repo root (package installed):
 
 ```bash
-python scripts/download_usda_data.py
+make download              # rates + diesel (pipeline step 1)
+make download-rates        # USDA rates only
+make download-diesel       # EIA diesel only
 ```
 
-Default fetch uses **`date >= 2024-07-01`**. Override with `--start-date` / `--end-date`. This writes:
+Or directly:
 
-- `raw/usda_refrigerated_truck_rates.parquet`
-- `raw/usda_refrigerated_truck_rates.metadata.json` (includes `query_start_date` / `query_end_date`)
+```bash
+python scripts/download_usda_data.py    # default date >= 2024-07-01
+python scripts/download_diesel_data.py  # default date >= 2024-06-01
+```
+
+Writes under `data/raw/`:
+
+| File | Content |
+|---|---|
+| `usda_refrigerated_truck_rates.parquet` | Lane-level weekly rates |
+| `usda_refrigerated_truck_rates.metadata.json` | Query bounds, row count |
+| `usda_diesel_weekly.parquet` | US weekly on-highway diesel |
+| `usda_diesel_weekly.metadata.json` | Query bounds |
 
 ## Git policy
 
-`data/raw/` and `data/processed/` snapshots are **intentionally not committed**. They can be large and are reproducible from the public USDA API. Only this README (and empty `.gitkeep` placeholders) is tracked under `data/`.
+`data/raw/` and `data/processed/` are not committed. Regenerate with `make download`.
