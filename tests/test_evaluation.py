@@ -124,6 +124,15 @@ def test_run_walkforward_gbm_smoke_no_leakage() -> None:
     # No future in any implied train: first forecast uses only pre-2025 dates.
     assert result.predictions["date"].min() >= pd.Timestamp("2025-01-07")
     assert "y_pred_baseline" in result.predictions.columns
+    assert "delta_hat" in result.predictions.columns
+    # Residual target: y_pred = lag-1 + delta_hat
+    reconstructed = result.predictions["y_pred_baseline"] + result.predictions["delta_hat"]
+    pd.testing.assert_series_equal(
+        result.predictions["y_pred"],
+        reconstructed,
+        check_names=False,
+        atol=1e-9,
+    )
     assert result.overall.loc[0, "n"] == 4
 
 
@@ -137,3 +146,16 @@ def test_run_walkforward_respects_max_folds() -> None:
     )
     assert set(result.predictions["date"]) == {pd.Timestamp("2025-01-07")}
     assert len(result.predictions) == 2
+
+
+def test_run_walkforward_direct_target_still_works() -> None:
+    panel = _synthetic_panel()
+    result = run_walkforward_gbm(
+        panel,
+        first_forecast_date="2025-01-07",
+        max_folds=1,
+        residual_target=False,
+        model=default_gbm(max_iter=10, max_depth=2, min_samples_leaf=1),
+    )
+    assert len(result.predictions) == 2
+    assert "delta_hat" in result.predictions.columns

@@ -27,9 +27,13 @@ class WalkForwardResult:
 
 
 def default_gbm(**overrides: Any) -> HistGradientBoostingRegressor:
-    """HistGradientBoostingRegressor with modest defaults for weekly re-fits."""
+    """HistGradientBoostingRegressor with modest defaults for weekly re-fits.
+
+    Default ``loss="absolute_error"`` aligns training with the headline MAE
+    metric (more robust to large week-to-week jumps than squared error).
+    """
     params: dict[str, Any] = {
-        "loss": "squared_error",
+        "loss": "absolute_error",
         "learning_rate": 0.08,
         "max_iter": 200,
         "max_depth": 6,
@@ -47,6 +51,7 @@ def run_walkforward_gbm(
     first_forecast_date: pd.Timestamp | str = FIRST_FORECAST_DATE,
     max_folds: int | None = None,
     model: HistGradientBoostingRegressor | None = None,
+    residual_target: bool = True,
     verbose: bool = False,
 ) -> WalkForwardResult:
     """Train/score an expanding-window global GBM under Case B.
@@ -55,7 +60,8 @@ def run_walkforward_gbm(
 
     - fit :class:`LaneWeekFeatureBuilder` on ``date < t`` only
     - transform train+score together so lags see prior history
-    - fit GBM on train features; predict score rows
+    - by default fit GBM on residual ``delta = rpm - rpm_lag_1``, then
+      ``y_pred = rpm_lag_1 + delta_hat`` (anchors to the lag-1 baseline)
     - baseline = ``rpm_lag_1`` (train global mean fill when no history)
 
     Parameters
@@ -69,6 +75,10 @@ def run_walkforward_gbm(
     model:
         Optional pre-configured regressor; a fresh clone is not required —
         the same estimator instance is re-fit each fold.
+    residual_target:
+        When ``True`` (default), train on ``rpm - rpm_lag_1`` and reconstruct
+        RPM predictions by adding the lag-1 baseline back. When ``False``,
+        train directly on ``rpm``.
     verbose:
         Print progress every fold when True.
     """
@@ -97,12 +107,21 @@ def run_walkforward_gbm(
         features = builder.transform(combined)
         x_train = features.loc[fold.train.index]
         x_score = features.loc[fold.score.index]
-        y_train = fold.train[TARGET_COLUMN].astype(float)
-
-        estimator.fit(x_train, y_train)
-        y_pred = np.asarray(estimator.predict(x_score), dtype=float)
-        y_true = fold.score[TARGET_COLUMN].astype(float).to_numpy()
+        y_train_rpm = fold.train[TARGET_COLUMN].astype(float)
+        y_base_train = x_train["rpm_lag_1"].astype(float)
         y_base = x_score["rpm_lag_1"].to_numpy(dtype=float)
+
+        if residual_target:
+            y_train = (y_train_rpm - y_base_train).astype(float)
+            estimator.fit(x_train, y_train)
+            delta_hat = np.asarray(estimator.predict(x_score), dtype=float)
+            y_pred = y_base + delta_hat
+        else:
+            estimator.fit(x_train, y_train_rpm)
+            y_pred = np.asarray(estimator.predict(x_score), dtype=float)
+            delta_hat = y_pred - y_base
+
+        y_true = fold.score[TARGET_COLUMN].astype(float).to_numpy()
         lane_hist = x_score["lane_history_n"].to_numpy(dtype=float)
 
         score = fold.score.reset_index(drop=True)
@@ -122,6 +141,7 @@ def run_walkforward_gbm(
                 "y_true": y_true,
                 "y_pred": y_pred,
                 "y_pred_baseline": y_base,
+                "delta_hat": delta_hat,
                 "lane_history_n": lane_hist,
                 "residual": y_true - y_pred,
             }
@@ -145,6 +165,7 @@ def run_walkforward_gbm(
                 "y_true",
                 "y_pred",
                 "y_pred_baseline",
+                "delta_hat",
                 "lane_history_n",
                 "residual",
                 "history_bucket",

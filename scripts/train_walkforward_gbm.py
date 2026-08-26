@@ -71,10 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         f"first_forecast={pd.Timestamp(FIRST_FORECAST_DATE).date()}"
     )
 
-    print("Running expanding-window walk-forward GBM (Case B)...")
+    print("Running expanding-window walk-forward GBM (Case B, residual target)...")
     result = run_walkforward_gbm(
         panel,
         max_folds=args.max_folds,
+        residual_target=True,
         verbose=not args.quiet,
     )
 

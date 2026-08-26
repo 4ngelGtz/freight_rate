@@ -9,6 +9,11 @@ from freight_rates.splits import iter_walk_forward
 from freight_rates.walkforward import default_gbm, run_walkforward_gbm
 
 
+def test_default_gbm_optimizes_absolute_error() -> None:
+    model = default_gbm()
+    assert model.loss == "absolute_error"
+
+
 def _panel() -> pd.DataFrame:
     rows = []
     for i, d in enumerate(["2024-12-24", "2024-12-31", "2025-01-07", "2025-01-14", "2025-01-21"]):
