@@ -39,6 +39,34 @@ Those destinations in our snapshot are: Atlanta, Baltimore, Boston, Chicago, Dal
 
 The curated modeling population is the **lane-week panel** (`date + origin + destination`), built from the raw snapshot via `build_lane_week_panel()` — one row per lane-week, with `rpm` aggregated by mean when reporting duplicates exist.
 
+### Field glossary
+
+Definitions follow USDA AMS Specialty Crops Market News methodology ([Agricultural Refrigerated Truck Quarterly Datasets](https://www.ams.usda.gov/services/transportation-analysis/agricultural-refrigerated-truck-quarterly-datasets); weekly [Fruit and Vegetable Truck Rate Report](https://www.ams.usda.gov/mnreports/fvwtrk.pdf)).
+
+| Field | Meaning |
+|---|---|
+| `origin` | Agricultural shipping district / producing area |
+| `destination` | One of the 10 wholesale receiving cities listed above |
+| `distance` | Typical haul miles from origin area to destination city |
+| `commodity` | Commodity (or commodity group) for which the rate was reported |
+| `weeklow` / `weekhigh` | Spot truckload rate range for the week ($/load) |
+| `midpoint` | Midpoint of the weekly rate band (used with distance to derive RPM) |
+| `rpm` | Rate per mile ($/mile) — modeling target; reconstructs as `midpoint / distance` |
+| `availability` | Spot refrigerated-truck availability at origin (ordinal 1–5; see below) |
+| `region` | AMS Transportation Services regional assignment |
+
+**`availability` scale** (source: [Weekly Truck Availability by Origin and Commodity](https://www.ams.usda.gov/services/transportation-analysis/agricultural-refrigerated-truck-quarterly-datasets)):
+
+| Code | Label |
+|---:|---|
+| 1 | Surplus |
+| 2 | Slight surplus |
+| 3 | Adequate |
+| 4 | Slight shortage |
+| 5 | Shortage |
+
+Rates are open (spot) market truckload quotes including broker fees for single-destination loads in 48–53 ft refrigerated trailers. For modeling, treat `weeklow`, `weekhigh`, and `midpoint` as **target leakage** if `rpm` is the outcome; `distance` and `availability` are legitimate pre-shipment features when known at prediction time.
+
 ## Setup
 
 ```bash
