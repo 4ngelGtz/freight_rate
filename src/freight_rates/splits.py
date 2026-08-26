@@ -75,6 +75,35 @@ def assign_temporal_split(dates: pd.Series) -> pd.Series:
     return out
 
 
+def resolve_forecast_date(
+    panel: pd.DataFrame,
+    *,
+    forecast_date: pd.Timestamp | str | None = None,
+) -> pd.Timestamp:
+    """Return the week-ending Tuesday to score.
+
+    When ``forecast_date`` is omitted, uses the latest ``date`` in ``panel``.
+    Raises when the requested week has no lane rows.
+    """
+    if "date" not in panel.columns:
+        raise KeyError("panel must include a 'date' column")
+
+    dates = pd.to_datetime(panel["date"])
+    if forecast_date is not None:
+        t = pd.Timestamp(forecast_date)
+        if not (dates == t).any():
+            available = sorted(d.date() for d in dates.dropna().unique())
+            raise ValueError(
+                f"No panel rows for forecast date {t.date()}. "
+                f"Available dates: {available[0]} → {available[-1]} ({len(available)} weeks)."
+            )
+        return t
+
+    if dates.empty:
+        raise ValueError("panel has no dates; cannot resolve forecast week")
+    return pd.Timestamp(dates.max())
+
+
 def iter_walk_forward(
     panel: pd.DataFrame,
     *,

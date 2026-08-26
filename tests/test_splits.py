@@ -15,6 +15,7 @@ from freight_rates.splits import (
     assign_temporal_split,
     filter_model_window,
     iter_walk_forward,
+    resolve_forecast_date,
 )
 
 
@@ -165,3 +166,19 @@ def test_iter_walk_forward_rejects_inverted_forecast_bounds() -> None:
 def test_iter_walk_forward_requires_date_column() -> None:
     with pytest.raises(KeyError, match="date"):
         list(iter_walk_forward(pd.DataFrame({"rpm": [1.0]})))
+
+
+def test_resolve_forecast_date_defaults_to_latest() -> None:
+    panel = _panel(["2024-12-31", "2025-01-07", "2025-01-14"])
+    assert resolve_forecast_date(panel) == pd.Timestamp("2025-01-14")
+
+
+def test_resolve_forecast_date_explicit_week() -> None:
+    panel = _panel(["2024-12-31", "2025-01-07", "2025-01-14"])
+    assert resolve_forecast_date(panel, forecast_date="2025-01-07") == pd.Timestamp("2025-01-07")
+
+
+def test_resolve_forecast_date_missing_week_raises() -> None:
+    panel = _panel(["2024-12-31", "2025-01-07"])
+    with pytest.raises(ValueError, match="No panel rows"):
+        resolve_forecast_date(panel, forecast_date="2025-01-14")

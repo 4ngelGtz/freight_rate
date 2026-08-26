@@ -15,6 +15,7 @@ MODELS_DIR := models
 .PHONY: help setup download download-rates download-diesel \
         hpo hpo-smoke walkforward walkforward-smoke manifest \
         pipeline pipeline-smoke pipeline-no-download \
+        score score-no-download \
         test lint
 
 help:
@@ -30,6 +31,8 @@ help:
 	@echo "  pipeline              download + hpo + walkforward + manifest"
 	@echo "  pipeline-no-download  hpo + walkforward + manifest (data already local)"
 	@echo "  pipeline-smoke        pipeline with --max-configs 2 --max-folds 3"
+	@echo "  score                 download + score latest week with θ*"
+	@echo "  score-no-download     score latest week (data already local)"
 	@echo "  hpo-smoke / walkforward-smoke   individual smoke steps"
 	@echo "  test / lint           pytest / ruff"
 
@@ -65,6 +68,11 @@ pipeline: download hpo walkforward manifest
 pipeline-no-download: hpo walkforward manifest
 
 pipeline-smoke: download hpo-smoke walkforward-smoke manifest
+
+score: download score-no-download
+
+score-no-download:
+	$(PYTHON) scripts/score_week.py --hpo-params $(HPO_PARAMS)
 
 test:
 	$(PYTHON) -m pytest

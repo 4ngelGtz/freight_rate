@@ -81,3 +81,17 @@ def test_walkforward_prediction_count_matches_score() -> None:
     )
     expected = sum(len(f.score) for f in iter_walk_forward(panel, first_forecast_date="2025-01-07"))
     assert len(result.predictions) == expected
+
+
+def test_walkforward_single_week_score() -> None:
+    panel = _panel()
+    t = pd.Timestamp("2025-01-21")
+    result = run_walkforward_gbm(
+        panel,
+        first_forecast_date=t,
+        last_forecast_date=t,
+        model=default_gbm(max_iter=15, max_depth=2, min_samples_leaf=1),
+    )
+    assert len(result.predictions) == 1
+    assert set(result.predictions["date"]) == {t}
+    assert result.predictions["y_pred"].notna().all()

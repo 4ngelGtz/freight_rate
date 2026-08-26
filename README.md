@@ -37,13 +37,35 @@ Equivalent one-liner: `python scripts/run_pipeline.py` (same steps as `make pipe
 
 **Headline metric:** dual-regime — overall MAE lift + cold-start 0–4 lift.
 
+## Recommended operational cadence
+
+1. **Tune θ* (infrequent):** run `make hpo` on the validation window when you want to refresh hyperparameters (not every week).
+2. **Score weekly (each USDA release):** re-fit the GBM on all history `date < t` with fixed θ* from `models/nested_hpo/best_params.json`, then predict lanes for `date == t`.
+3. **Re-tune θ* only** when validation performance drifts — the weekly step keeps θ* fixed.
+
+```bash
+make score                 # download → score latest week
+make score-no-download     # score with existing data/raw/
+python scripts/score_week.py --date 2025-08-26   # specific week
+```
+
+## Scoring pipeline
+
+| Target | Script | What it does | Output |
+|---|---|---|---|
+| `score` | `score_week.py` | Download fresh snapshots, re-fit GBM on `date < t` with θ*, predict `date == t` (latest week by default) | `models/score/score_*_predictions.parquet`, `latest_predictions.parquet`, `latest.json` |
+| `score-no-download` | `score_week.py` | Same without download | same |
+
+Requires `models/nested_hpo/best_params.json` from `make hpo` (or `make pipeline`).
+
 ## Artifacts (`models/`, gitignored)
 
 ```
 models/
 ├── run_manifest.json
 ├── nested_hpo/best_params.json, hpo_val_summary.csv
-└── walkforward_gbm/*_predictions.parquet, *_metrics_*.csv
+├── walkforward_gbm/*_predictions.parquet, *_metrics_*.csv
+└── score/score_*_predictions.parquet, latest_predictions.parquet, latest.json
 ```
 
 ## Notebooks
