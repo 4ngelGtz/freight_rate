@@ -8,6 +8,8 @@ import pytest
 from freight_rates.evaluation import (
     HISTORY_BUCKETS,
     assign_history_bucket,
+    dual_regime_headline,
+    format_dual_regime_report,
     mae,
     mape,
     medae,
@@ -95,6 +97,8 @@ def _synthetic_panel() -> pd.DataFrame:
                     "quarter": (ts.month - 1) // 3 + 1,
                     "distance": 1000.0,
                     "availability": 3.0,
+                    "diesel_us": 3.5 + 0.01 * i,
+                    "diesel_us_chg_1w": 0.01,
                     TARGET_COLUMN: base + 0.1 * i,
                 }
             )
@@ -159,3 +163,64 @@ def test_run_walkforward_direct_target_still_works() -> None:
     )
     assert len(result.predictions) == 2
     assert "delta_hat" in result.predictions.columns
+
+
+def test_dual_regime_headline_cold_start() -> None:
+    overall = pd.DataFrame(
+        [
+            {
+                "n": 100,
+                "mae": 0.15,
+                "medae": 0.05,
+                "mape": 4.0,
+                "mae_baseline": 0.14,
+                "medae_baseline": 0.02,
+                "mae_lift": -0.01,
+            }
+        ]
+    )
+    by_history = pd.DataFrame(
+        [
+            {
+                "history_bucket": "0-4",
+                "n": 20,
+                "mae": 0.35,
+                "medae": 0.2,
+                "mape": 10.0,
+                "mae_baseline": 0.40,
+                "medae_baseline": 0.22,
+                "mae_lift": 0.05,
+            },
+            {
+                "history_bucket": "20-99",
+                "n": 80,
+                "mae": 0.10,
+                "medae": 0.02,
+                "mape": 3.0,
+                "mae_baseline": 0.09,
+                "medae_baseline": 0.01,
+                "mae_lift": -0.01,
+            },
+        ]
+    )
+    headline = dual_regime_headline(overall, by_history, label="full")
+    assert headline.loc[0, "label"] == "full"
+    assert bool(headline.loc[0, "beats_lag1_overall"]) is False
+    assert bool(headline.loc[0, "beats_lag1_cold"]) is True
+    assert headline.loc[0, "cold_mae_lift"] == pytest.approx(0.05)
+    text = format_dual_regime_report(headline)
+    assert "Dual-regime" in text
+    assert "cold 0-4" in text
+
+
+def test_run_walkforward_diesel_none_mode() -> None:
+    panel = _synthetic_panel()
+    result = run_walkforward_gbm(
+        panel,
+        first_forecast_date="2025-01-07",
+        max_folds=1,
+        diesel_features="none",
+        model=default_gbm(max_iter=10, max_depth=2, min_samples_leaf=1),
+    )
+    assert result.diesel_features == "none"
+    assert len(result.predictions) == 2

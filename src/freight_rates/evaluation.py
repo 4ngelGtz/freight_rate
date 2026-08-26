@@ -128,3 +128,84 @@ def summarize_predictions(
         by_history = by_history[cols]
 
     return {"overall": overall, "by_week": by_week, "by_history": by_history}
+
+
+COLD_START_BUCKET: Final[str] = "0-4"
+
+
+def dual_regime_headline(
+    overall: pd.DataFrame,
+    by_history: pd.DataFrame,
+    *,
+    cold_bucket: str = COLD_START_BUCKET,
+    label: str | None = None,
+) -> pd.DataFrame:
+    """One-row dual-regime scorecard: overall MAE + cold-start (0-4) lift.
+
+    The residual GBM is not expected to beat lag-1 everywhere. Headline success
+    is reported as (1) overall MAE vs lag-1 and (2) MAE lift on cold-start lanes.
+    """
+    if overall.empty:
+        raise ValueError("overall metrics frame is empty")
+
+    o = overall.iloc[0]
+    row: dict[str, float | int | str] = {
+        "n": int(o["n"]),
+        "mae": float(o["mae"]),
+        "mae_baseline": float(o["mae_baseline"])
+        if "mae_baseline" in overall.columns
+        else float("nan"),
+        "mae_lift": float(o["mae_lift"]) if "mae_lift" in overall.columns else float("nan"),
+        "beats_lag1_overall": bool(o["mae_lift"] > 0) if "mae_lift" in overall.columns else False,
+    }
+    if label is not None:
+        row = {"label": label, **row}
+
+    cold = by_history.loc[by_history["history_bucket"] == cold_bucket]
+    if cold.empty:
+        row.update(
+            {
+                "cold_n": 0,
+                "cold_mae": float("nan"),
+                "cold_mae_baseline": float("nan"),
+                "cold_mae_lift": float("nan"),
+                "beats_lag1_cold": False,
+            }
+        )
+    else:
+        c = cold.iloc[0]
+        cold_lift = float(c["mae_lift"]) if "mae_lift" in cold.columns else float("nan")
+        row.update(
+            {
+                "cold_n": int(c["n"]),
+                "cold_mae": float(c["mae"]),
+                "cold_mae_baseline": float(c["mae_baseline"])
+                if "mae_baseline" in cold.columns
+                else float("nan"),
+                "cold_mae_lift": cold_lift,
+                "beats_lag1_cold": bool(cold_lift > 0) if np.isfinite(cold_lift) else False,
+            }
+        )
+    return pd.DataFrame([row])
+
+
+def format_dual_regime_report(headline: pd.DataFrame) -> str:
+    """Human-readable dual-regime block for CLI / notebook printing."""
+    if headline.empty:
+        return "(empty dual-regime headline)"
+    r = headline.iloc[0]
+    title = f" [{r['label']}]" if "label" in headline.columns else ""
+    lines = [
+        f"=== Dual-regime headline{title} ===",
+        (
+            f"overall: n={int(r['n']):,}  MAE={r['mae']:.4f}  "
+            f"lag1={r['mae_baseline']:.4f}  lift={r['mae_lift']:+.4f}  "
+            f"beats_lag1={bool(r['beats_lag1_overall'])}"
+        ),
+        (
+            f"cold {COLD_START_BUCKET}: n={int(r['cold_n']):,}  MAE={r['cold_mae']:.4f}  "
+            f"lag1={r['cold_mae_baseline']:.4f}  lift={r['cold_mae_lift']:+.4f}  "
+            f"beats_lag1={bool(r['beats_lag1_cold'])}"
+        ),
+    ]
+    return "\n".join(lines)

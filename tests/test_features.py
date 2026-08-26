@@ -71,7 +71,11 @@ def _panel_rows() -> pd.DataFrame:
             ),
         ]
     )
-    return build_lane_week_panel(raw, validate=False)
+    panel = build_lane_week_panel(raw, validate=False)
+    # Synthetic Case-B-safe diesel (already as-of lagged).
+    panel["diesel_us"] = 1.5 + 0.01 * panel.index.to_series().astype(float)
+    panel["diesel_us_chg_1w"] = 0.02
+    return panel
 
 
 def _lane_a_idx(panel: pd.DataFrame, date: str) -> int:
@@ -262,6 +266,9 @@ def test_categorical_features_constant() -> None:
     assert CATEGORICAL_FEATURES == ("origin", "destination", "region")
     assert "availability" not in NUMERIC_FEATURES
     assert "availability_lag_1" in NUMERIC_FEATURES
+    assert "diesel_us" in NUMERIC_FEATURES
+    assert "diesel_distance" in NUMERIC_FEATURES
+    assert "diesel_us_chg_1w" not in NUMERIC_FEATURES
     for name in (
         "rpm_lag_2",
         "weeks_since_last_observation",
@@ -271,3 +278,56 @@ def test_categorical_features_constant() -> None:
         "rpm_vs_rolling_4",
     ):
         assert name in NUMERIC_FEATURES
+
+
+def test_feature_builder_includes_diesel_columns() -> None:
+    panel = _panel_rows()
+    builder = LaneWeekFeatureBuilder(diesel_features="full")
+    features = builder.fit_transform(panel)
+    assert "diesel_us" in features.columns
+    assert "diesel_us_chg_1w" in features.columns
+    assert "diesel_distance" in features.columns
+    assert features["diesel_us"].notna().all()
+    assert "diesel_date" not in features.columns
+
+
+def test_feature_builder_default_is_diesel_level() -> None:
+    panel = _panel_rows()
+    builder = LaneWeekFeatureBuilder()
+    features = builder.fit_transform(panel)
+    assert "diesel_us" in features.columns
+    assert "diesel_distance" in features.columns
+    assert "diesel_us_chg_1w" not in features.columns
+    # diesel_distance = diesel_us * (distance / 1000)
+    expected = features["diesel_us"] * (panel["distance"].astype(float) / 1000.0)
+    pd.testing.assert_series_equal(
+        features["diesel_distance"],
+        expected,
+        check_names=False,
+        atol=1e-9,
+    )
+
+
+def test_feature_builder_diesel_mode_none_omits_diesel() -> None:
+    panel = _panel_rows()
+    builder = LaneWeekFeatureBuilder(diesel_features="none")
+    features = builder.fit_transform(panel)
+    assert "diesel_us" not in features.columns
+    assert "diesel_distance" not in features.columns
+    assert "diesel_us_chg_1w" not in features.columns
+
+
+def test_feature_builder_diesel_mode_level_only() -> None:
+    panel = _panel_rows()
+    builder = LaneWeekFeatureBuilder(diesel_features="level")
+    features = builder.fit_transform(panel)
+    assert "diesel_us" in features.columns
+    assert "diesel_distance" in features.columns
+    assert "diesel_us_chg_1w" not in features.columns
+
+
+def test_feature_builder_diesel_none_works_without_diesel_columns() -> None:
+    panel = _panel_rows().drop(columns=["diesel_us", "diesel_us_chg_1w"])
+    builder = LaneWeekFeatureBuilder(diesel_features="none")
+    features = builder.fit_transform(panel)
+    assert len(features) == len(panel)

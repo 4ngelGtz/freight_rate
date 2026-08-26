@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Final
 
 import pandas as pd
 
-from freight_rates.ingestion import add_lane_id, validate_schema
+from freight_rates.diesel import attach_diesel_asof, load_diesel_snapshot
+from freight_rates.ingestion import DEFAULT_RAW_DIR, add_lane_id, validate_schema
 
 LANE_WEEK_KEY: Final[tuple[str, ...]] = ("date", "origin", "destination")
 
@@ -100,3 +102,27 @@ def build_lane_week_panel(
 
     sort_cols = ["date", "origin", "destination"]
     return grouped.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
+
+
+def build_modeling_panel(
+    rates_raw: pd.DataFrame,
+    diesel_raw: pd.DataFrame | None = None,
+    *,
+    raw_dir: Path | str = DEFAULT_RAW_DIR,
+    validate: bool = True,
+    drop_invalid_rpm: bool = True,
+    drop_invalid_distance: bool = False,
+) -> pd.DataFrame:
+    """Build the lane-week panel and attach Case-B-safe US diesel features.
+
+    If ``diesel_raw`` is omitted, loads ``usda_diesel_weekly.parquet`` from
+    ``raw_dir`` (see :func:`freight_rates.diesel.load_diesel_snapshot`).
+    """
+    panel = build_lane_week_panel(
+        rates_raw,
+        validate=validate,
+        drop_invalid_rpm=drop_invalid_rpm,
+        drop_invalid_distance=drop_invalid_distance,
+    )
+    diesel = diesel_raw if diesel_raw is not None else load_diesel_snapshot(raw_dir=raw_dir)
+    return attach_diesel_asof(panel, diesel)

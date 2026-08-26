@@ -124,6 +124,44 @@ def test_iter_walk_forward_respects_custom_first_forecast_date() -> None:
     assert all(f.t >= pd.Timestamp("2025-01-14") for f in folds)
 
 
+def test_iter_walk_forward_respects_last_forecast_date() -> None:
+    panel = _panel(
+        [
+            "2024-12-31",
+            "2025-01-07",
+            "2025-01-14",
+            "2025-01-21",
+            "2025-01-28",
+        ]
+    )
+    folds = list(
+        iter_walk_forward(
+            panel,
+            first_forecast_date="2025-01-07",
+            last_forecast_date="2025-01-21",
+        )
+    )
+    assert [f.t for f in folds] == [
+        pd.Timestamp("2025-01-07"),
+        pd.Timestamp("2025-01-14"),
+        pd.Timestamp("2025-01-21"),
+    ]
+    # Expanding train still sees all history before t (including pre-first).
+    assert len(folds[-1].train) == 3
+
+
+def test_iter_walk_forward_rejects_inverted_forecast_bounds() -> None:
+    panel = _panel(["2024-12-31", "2025-01-07", "2025-01-14"])
+    with pytest.raises(ValueError, match="last_forecast_date"):
+        list(
+            iter_walk_forward(
+                panel,
+                first_forecast_date="2025-01-14",
+                last_forecast_date="2025-01-07",
+            )
+        )
+
+
 def test_iter_walk_forward_requires_date_column() -> None:
     with pytest.raises(KeyError, match="date"):
         list(iter_walk_forward(pd.DataFrame({"rpm": [1.0]})))

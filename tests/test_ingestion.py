@@ -104,10 +104,7 @@ def test_build_metadata() -> None:
 
 def test_build_date_where_clause() -> None:
     assert build_date_where_clause() is None
-    assert (
-        build_date_where_clause(start_date="2024-07-01")
-        == "date >= '2024-07-01T00:00:00.000'"
-    )
+    assert build_date_where_clause(start_date="2024-07-01") == "date >= '2024-07-01T00:00:00.000'"
     assert (
         build_date_where_clause(start_date="2024-07-01", end_date="2025-12-31")
         == "date >= '2024-07-01T00:00:00.000' AND date <= '2025-12-31T00:00:00.000'"
@@ -175,6 +172,28 @@ def test_fetch_usda_data_applies_start_date_where() -> None:
     fetch_usda_data(session=session, page_size=10, start_date="2024-07-01")
     params = session.get.call_args.kwargs["params"]
     assert params["$where"] == "date >= '2024-07-01T00:00:00.000'"
+
+
+def test_fetch_soda_resource_extra_where() -> None:
+    from freight_rates.ingestion import fetch_soda_resource
+
+    resp = MagicMock()
+    resp.ok = True
+    resp.json.return_value = []
+    session = MagicMock()
+    session.get.return_value = resp
+
+    fetch_soda_resource(
+        endpoint="https://example.test/resource.json",
+        expected_columns=("date",),
+        session=session,
+        page_size=10,
+        start_date="2024-06-01",
+        extra_where="region = 'US'",
+    )
+    params = session.get.call_args.kwargs["params"]
+    assert "date >= '2024-06-01T00:00:00.000'" in params["$where"]
+    assert "(region = 'US')" in params["$where"]
 
 
 def test_fetch_usda_data_default_start_date_where() -> None:

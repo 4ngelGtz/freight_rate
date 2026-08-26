@@ -79,7 +79,9 @@ def make_lane_id(origin: str, destination: str) -> str:
     return f"{origin} -> {destination}"
 
 
-def add_lane_id(df: pd.DataFrame, origin_col: str = "origin", dest_col: str = "destination") -> pd.DataFrame:
+def add_lane_id(
+    df: pd.DataFrame, origin_col: str = "origin", dest_col: str = "destination"
+) -> pd.DataFrame:
     """Return a copy of ``df`` with a ``lane_id`` column for inspection."""
     if origin_col not in df.columns or dest_col not in df.columns:
         missing = [c for c in (origin_col, dest_col) if c not in df.columns]
@@ -128,40 +130,22 @@ def build_date_where_clause(
     return " AND ".join(clauses)
 
 
-def fetch_usda_data(
+def fetch_soda_resource(
     *,
-    endpoint: str = API_ENDPOINT,
+    endpoint: str,
+    expected_columns: tuple[str, ...] | list[str],
     page_size: int = DEFAULT_PAGE_SIZE,
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     session: requests.Session | None = None,
     max_rows: int | None = None,
-    start_date: str | pd.Timestamp | datetime | None = DEFAULT_START_DATE,
+    start_date: str | pd.Timestamp | datetime | None = None,
     end_date: str | pd.Timestamp | datetime | None = None,
+    extra_where: str | None = None,
 ) -> pd.DataFrame:
-    """Download records from the USDA SODA API with pagination.
+    """Download records from a Socrata SODA resource with pagination.
 
-    Parameters
-    ----------
-    endpoint:
-        SODA resource URL.
-    page_size:
-        Page size for ``$limit`` / ``$offset`` pagination.
-    timeout:
-        Per-request timeout in seconds.
-    session:
-        Optional ``requests.Session`` (useful for tests / connection reuse).
-    max_rows:
-        Optional cap on total rows (for smoke tests). ``None`` fetches all.
-    start_date:
-        Inclusive lower bound on report ``date`` (week-ending Tuesday).
-        Defaults to :data:`DEFAULT_START_DATE`. Pass ``None`` for no lower bound.
-    end_date:
-        Inclusive upper bound on report ``date``. ``None`` means no upper bound.
-
-    Returns
-    -------
-    pandas.DataFrame
-        Raw API fields with values preserved (mostly object/string from JSON).
+    Shared helper for USDA AgTransport datasets (rates, diesel, …).
+    Preserves raw API values (mostly object/string from JSON).
     """
     if page_size <= 0:
         raise ValueError("page_size must be positive")
@@ -173,7 +157,14 @@ def fetch_usda_data(
     http = session or requests.Session()
     records: list[dict[str, Any]] = []
     offset = 0
-    where = build_date_where_clause(start_date=start_date, end_date=end_date)
+
+    where_parts: list[str] = []
+    date_where = build_date_where_clause(start_date=start_date, end_date=end_date)
+    if date_where is not None:
+        where_parts.append(date_where)
+    if extra_where:
+        where_parts.append(f"({extra_where})")
+    where = " AND ".join(where_parts) if where_parts else None
 
     try:
         while True:
@@ -208,9 +199,7 @@ def fetch_usda_data(
                 raise UsdaApiError(f"Invalid JSON in API response at offset={offset}") from exc
 
             if not isinstance(page, list):
-                raise UsdaApiError(
-                    f"Expected a JSON list from SODA API, got {type(page).__name__}"
-                )
+                raise UsdaApiError(f"Expected a JSON list from SODA API, got {type(page).__name__}")
 
             if not page:
                 break
@@ -227,10 +216,56 @@ def fetch_usda_data(
             http.close()
 
     if not records:
-        return pd.DataFrame(columns=list(EXPECTED_COLUMNS))
+        return pd.DataFrame(columns=list(expected_columns))
 
-    # Preserve raw API values; do not coerce numerics/dates at ingestion time.
     return pd.DataFrame.from_records(records)
+
+
+def fetch_usda_data(
+    *,
+    endpoint: str = API_ENDPOINT,
+    page_size: int = DEFAULT_PAGE_SIZE,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    session: requests.Session | None = None,
+    max_rows: int | None = None,
+    start_date: str | pd.Timestamp | datetime | None = DEFAULT_START_DATE,
+    end_date: str | pd.Timestamp | datetime | None = None,
+) -> pd.DataFrame:
+    """Download refrigerated-truck rate records from the USDA SODA API.
+
+    Parameters
+    ----------
+    endpoint:
+        SODA resource URL.
+    page_size:
+        Page size for ``$limit`` / ``$offset`` pagination.
+    timeout:
+        Per-request timeout in seconds.
+    session:
+        Optional ``requests.Session`` (useful for tests / connection reuse).
+    max_rows:
+        Optional cap on total rows (for smoke tests). ``None`` fetches all.
+    start_date:
+        Inclusive lower bound on report ``date`` (week-ending Tuesday).
+        Defaults to :data:`DEFAULT_START_DATE`. Pass ``None`` for no lower bound.
+    end_date:
+        Inclusive upper bound on report ``date``. ``None`` means no upper bound.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Raw API fields with values preserved (mostly object/string from JSON).
+    """
+    return fetch_soda_resource(
+        endpoint=endpoint,
+        expected_columns=EXPECTED_COLUMNS,
+        page_size=page_size,
+        timeout=timeout,
+        session=session,
+        max_rows=max_rows,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 # --- Snapshot I/O ------------------------------------------------------------

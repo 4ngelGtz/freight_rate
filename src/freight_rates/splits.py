@@ -79,16 +79,21 @@ def iter_walk_forward(
     panel: pd.DataFrame,
     *,
     first_forecast_date: pd.Timestamp | str = FIRST_FORECAST_DATE,
+    last_forecast_date: pd.Timestamp | str | None = None,
 ) -> Iterator[WalkForwardFold]:
     """Yield expanding-window folds for each forecast Tuesday ``t``.
 
-    For each unique ``date`` in the panel with ``t >= first_forecast_date``:
+    For each unique ``date`` in the panel with
+    ``first_forecast_date <= t <= last_forecast_date`` (``last`` optional):
 
     - **train**: rows with ``date < t``
     - **score**: rows with ``date == t``
 
     Skips ``t`` when the score set is empty. Assumes ``panel`` is already
     filtered to the modeling window (see :func:`filter_model_window`).
+
+    Use ``last_forecast_date`` for nested walk-forward tuning (e.g. val window
+    ending ``2025-06-24``) without changing the expanding train definition.
     """
     if "date" not in panel.columns:
         raise KeyError("panel must include a 'date' column")
@@ -96,8 +101,15 @@ def iter_walk_forward(
     work = panel.copy()
     work["date"] = pd.to_datetime(work["date"])
     first_t = pd.Timestamp(first_forecast_date)
+    last_t = pd.Timestamp(last_forecast_date) if last_forecast_date is not None else None
+    if last_t is not None and last_t < first_t:
+        raise ValueError("last_forecast_date must be >= first_forecast_date")
 
-    forecast_dates = sorted(d for d in work["date"].dropna().unique() if d >= first_t)
+    forecast_dates = sorted(
+        d
+        for d in work["date"].dropna().unique()
+        if d >= first_t and (last_t is None or d <= last_t)
+    )
 
     for t in forecast_dates:
         t = pd.Timestamp(t)

@@ -6,7 +6,7 @@ import pandas as pd
 
 from freight_rates.features import TARGET_COLUMN
 from freight_rates.splits import iter_walk_forward
-from freight_rates.walkforward import default_gbm, run_walkforward_gbm
+from freight_rates.walkforward import default_gbm, load_hpo_best_params, run_walkforward_gbm
 
 
 def test_default_gbm_optimizes_absolute_error() -> None:
@@ -31,6 +31,8 @@ def _panel() -> pd.DataFrame:
                 "quarter": (ts.month - 1) // 3 + 1,
                 "distance": 900.0,
                 "availability": float(2 + (i % 3)),
+                "diesel_us": 3.5 + 0.01 * i,
+                "diesel_us_chg_1w": 0.01,
                 TARGET_COLUMN: 2.0 + 0.05 * i,
             }
         )
@@ -41,6 +43,33 @@ def test_iter_walk_forward_train_before_t() -> None:
     for fold in iter_walk_forward(_panel(), first_forecast_date="2025-01-07"):
         assert fold.train["date"].max() < fold.t
         assert (fold.score["date"] == fold.t).all()
+
+
+def test_load_hpo_best_params(tmp_path) -> None:
+    path = tmp_path / "best_params.json"
+    pd.Series(
+        {
+            "config": "d3_l60_l2_1.0",
+            "max_depth": 3,
+            "min_samples_leaf": 60,
+            "l2_regularization": 1.0,
+            "learning_rate": 0.08,
+            "max_iter": 200,
+        }
+    ).to_json(path)
+
+    params = load_hpo_best_params(path)
+
+    assert params == {
+        "max_depth": 3,
+        "min_samples_leaf": 60,
+        "l2_regularization": 1.0,
+        "learning_rate": 0.08,
+        "max_iter": 200,
+    }
+    model = default_gbm(**params)
+    assert model.max_depth == 3
+    assert model.min_samples_leaf == 60
 
 
 def test_walkforward_prediction_count_matches_score() -> None:

@@ -4,6 +4,7 @@
 Usage (from repository root)::
 
     python scripts/train_walkforward_gbm.py
+    python scripts/train_walkforward_gbm.py --diesel none
     python scripts/train_walkforward_gbm.py --max-folds 5   # smoke
 """
 
@@ -20,8 +21,13 @@ _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from freight_rates.evaluation import (  # noqa: E402
+    dual_regime_headline,
+    format_dual_regime_report,
+)
+from freight_rates.features import DIESEL_FEATURE_MODES  # noqa: E402
 from freight_rates.ingestion import DEFAULT_RAW_DIR, load_raw_snapshot  # noqa: E402
-from freight_rates.preprocessing import build_lane_week_panel  # noqa: E402
+from freight_rates.preprocessing import build_modeling_panel  # noqa: E402
 from freight_rates.splits import FIRST_FORECAST_DATE, filter_model_window  # noqa: E402
 from freight_rates.walkforward import (  # noqa: E402
     run_walkforward_gbm,
@@ -46,6 +52,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Where to write predictions and metric CSVs (gitignored under models/).",
     )
     parser.add_argument(
+        "--diesel",
+        default="level",
+        choices=list(DIESEL_FEATURE_MODES),
+        help="Diesel feature mode: none | level (diesel_us, default) | full (level + WoW change).",
+    )
+    parser.add_argument(
         "--max-folds",
         type=int,
         default=None,
@@ -64,22 +76,38 @@ def main(argv: list[str] | None = None) -> int:
 
     print("Loading raw snapshot...")
     raw = load_raw_snapshot(raw_dir=args.raw_dir)
-    panel = filter_model_window(build_lane_week_panel(raw))
+    panel = filter_model_window(build_modeling_panel(raw, raw_dir=args.raw_dir))
     print(
         f"panel: {len(panel):,} rows  "
         f"{panel['date'].min().date()} → {panel['date'].max().date()}  "
-        f"first_forecast={pd.Timestamp(FIRST_FORECAST_DATE).date()}"
+        f"first_forecast={pd.Timestamp(FIRST_FORECAST_DATE).date()}  "
+        f"diesel={args.diesel}"
     )
 
-    print("Running expanding-window walk-forward GBM (Case B, residual target)...")
+    print(
+        f"Running expanding-window walk-forward GBM "
+        f"(Case B, residual target, diesel={args.diesel})..."
+    )
     result = run_walkforward_gbm(
         panel,
         max_folds=args.max_folds,
         residual_target=True,
+        diesel_features=args.diesel,
         verbose=not args.quiet,
     )
 
     paths = save_walkforward_outputs(result, args.output_dir)
+    headline = dual_regime_headline(
+        result.overall,
+        result.by_history,
+        label=args.diesel,
+    )
+    headline_path = Path(args.output_dir) / "walkforward_gbm_metrics_dual_regime.csv"
+    Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    headline.to_csv(headline_path, index=False)
+
+    print()
+    print(format_dual_regime_report(headline))
     print()
     print("=== Overall ===")
     print(result.overall.to_string(index=False))
@@ -91,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"metrics:     {paths['overall']}")
     print(f"             {paths['by_week']}")
     print(f"             {paths['by_history']}")
+    print(f"             {headline_path}")
     return 0
 
 

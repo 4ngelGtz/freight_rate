@@ -20,7 +20,9 @@ TARGET_COLUMN: Final[str] = "rpm"
 # ``region`` pools sparse / new origins; Fourier seasonality is intentionally omitted
 # until diagnostics show incremental value beyond lag-1.
 CATEGORICAL_FEATURES: Final[tuple[str, ...]] = ("origin", "destination", "region")
-NUMERIC_FEATURES: Final[tuple[str, ...]] = (
+
+# Core numerics (no exogenous diesel). Diesel columns are appended by mode.
+CORE_NUMERIC_FEATURES: Final[tuple[str, ...]] = (
     "distance",
     "availability_lag_1",
     "year",
@@ -39,6 +41,21 @@ NUMERIC_FEATURES: Final[tuple[str, ...]] = (
     "rpm_delta_1_2",
     "rpm_vs_rolling_4",
 )
+
+# Exogenous diesel (Case-B as-of lagged at panel merge time).
+# ``diesel_distance`` = diesel_us * (distance / DISTANCE_SCALE_MILES) — fuel-cost proxy.
+DISTANCE_SCALE_MILES: Final[float] = 1000.0
+DIESEL_LEVEL_FEATURES: Final[tuple[str, ...]] = ("diesel_us", "diesel_distance")
+DIESEL_FULL_FEATURES: Final[tuple[str, ...]] = (
+    "diesel_us",
+    "diesel_us_chg_1w",
+    "diesel_distance",
+)
+DIESEL_FEATURE_MODES: Final[tuple[str, ...]] = ("none", "level", "full")
+
+# Default = level (diesel_us + diesel_distance); WoW change did not help in ablation.
+NUMERIC_FEATURES: Final[tuple[str, ...]] = CORE_NUMERIC_FEATURES + DIESEL_LEVEL_FEATURES
+
 DERIVED_NUMERIC_FEATURES: Final[tuple[str, ...]] = (
     "week_of_year",
     "lane_history_n",
@@ -52,7 +69,22 @@ DERIVED_NUMERIC_FEATURES: Final[tuple[str, ...]] = (
     "rpm_rolling_4",
     "rpm_delta_1_2",
     "rpm_vs_rolling_4",
+    "diesel_distance",
 )
+
+
+def numeric_features_for_diesel_mode(diesel_features: str = "level") -> tuple[str, ...]:
+    """Return numeric feature names for a diesel ablation mode."""
+    mode = diesel_features.lower().strip()
+    if mode not in DIESEL_FEATURE_MODES:
+        raise ValueError(
+            f"diesel_features must be one of {DIESEL_FEATURE_MODES}, got {diesel_features!r}"
+        )
+    if mode == "none":
+        return CORE_NUMERIC_FEATURES
+    if mode == "level":
+        return CORE_NUMERIC_FEATURES + DIESEL_LEVEL_FEATURES
+    return CORE_NUMERIC_FEATURES + DIESEL_FULL_FEATURES
 
 
 class LaneWeekFeatureBuilder(BaseEstimator, TransformerMixin):
@@ -76,15 +108,29 @@ class LaneWeekFeatureBuilder(BaseEstimator, TransformerMixin):
         *,
         include_lags: bool = True,
         rolling_window: int = 4,
+        diesel_features: str = "level",
     ) -> None:
         self.include_lags = include_lags
         self.rolling_window = rolling_window
+        self.diesel_features = diesel_features
+
+    @property
+    def numeric_feature_names(self) -> tuple[str, ...]:
+        return numeric_features_for_diesel_mode(self.diesel_features)
 
     def fit(self, X: pd.DataFrame, y: pd.Series | None = None) -> LaneWeekFeatureBuilder:
         """Learn encoders and train-only cold-start fallbacks for lags."""
         panel = self._validate_panel(X)
         self.global_rpm_mean_ = float(panel[TARGET_COLUMN].mean())
         self.global_availability_fill_ = float(panel["availability"].median())
+        if "diesel_us" in panel.columns and panel["diesel_us"].notna().any():
+            self.global_diesel_us_fill_ = float(panel["diesel_us"].median())
+        else:
+            self.global_diesel_us_fill_ = 0.0
+        if "diesel_us_chg_1w" in panel.columns and panel["diesel_us_chg_1w"].notna().any():
+            self.global_diesel_chg_fill_ = float(panel["diesel_us_chg_1w"].median())
+        else:
+            self.global_diesel_chg_fill_ = 0.0
         self._encoder = ColumnTransformer(
             transformers=[
                 (
@@ -105,7 +151,20 @@ class LaneWeekFeatureBuilder(BaseEstimator, TransformerMixin):
             raise RuntimeError("LaneWeekFeatureBuilder has not been fitted yet.")
 
         panel = self._add_history_features(self._validate_panel(X))
-        numeric = panel[list(NUMERIC_FEATURES)].astype(float)
+        if (
+            "diesel_us" in self.numeric_feature_names
+            or "diesel_distance" in self.numeric_feature_names
+        ):
+            panel["diesel_us"] = panel["diesel_us"].fillna(self.global_diesel_us_fill_)
+        if "diesel_us_chg_1w" in self.numeric_feature_names:
+            panel["diesel_us_chg_1w"] = panel["diesel_us_chg_1w"].fillna(
+                self.global_diesel_chg_fill_
+            )
+        if "diesel_distance" in self.numeric_feature_names:
+            panel["diesel_distance"] = panel["diesel_us"].astype(float) * (
+                panel["distance"].astype(float) / DISTANCE_SCALE_MILES
+            )
+        numeric = panel[list(self.numeric_feature_names)].astype(float)
         encoded = self._encoder.transform(panel[list(CATEGORICAL_FEATURES)])
         encoded_df = pd.DataFrame(
             encoded,
@@ -132,11 +191,16 @@ class LaneWeekFeatureBuilder(BaseEstimator, TransformerMixin):
 
     def _build_feature_names(self) -> list[str]:
         cat_names = list(self._encoder.get_feature_names_out())
-        return list(NUMERIC_FEATURES) + cat_names
+        return list(self.numeric_feature_names) + cat_names
 
     def _validate_panel(self, X: pd.DataFrame) -> pd.DataFrame:
         required = set(LANE_WEEK_KEY) | {TARGET_COLUMN, "distance", "availability", "region"}
         required |= {"year", "month", "week", "quarter"}
+        # diesel_distance is derived; only require raw diesel columns present on the panel.
+        raw_diesel_needed = set(self.numeric_feature_names) & {"diesel_us", "diesel_us_chg_1w"}
+        if "diesel_distance" in self.numeric_feature_names:
+            raw_diesel_needed.add("diesel_us")
+        required |= raw_diesel_needed
         missing = sorted(required - set(X.columns))
         if missing:
             raise ValueError(f"Lane-week panel is missing required columns: {missing}")
@@ -144,7 +208,19 @@ class LaneWeekFeatureBuilder(BaseEstimator, TransformerMixin):
         panel = X.copy()
         panel["date"] = pd.to_datetime(panel["date"], errors="coerce")
         panel["region"] = panel["region"].astype(str)
-        for col in ("year", "month", "week", "quarter", "distance", "availability", TARGET_COLUMN):
+        numeric_cols = [
+            "year",
+            "month",
+            "week",
+            "quarter",
+            "distance",
+            "availability",
+            TARGET_COLUMN,
+        ]
+        for col in ("diesel_us", "diesel_us_chg_1w"):
+            if col in panel.columns:
+                numeric_cols.append(col)
+        for col in numeric_cols:
             panel[col] = pd.to_numeric(panel[col], errors="coerce")
         return panel
 

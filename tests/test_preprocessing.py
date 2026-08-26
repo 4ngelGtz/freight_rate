@@ -125,3 +125,37 @@ def test_build_lane_week_panel_expected_columns_subset() -> None:
     assert set(LANE_WEEK_KEY).issubset(panel.columns)
     assert "lane_id" in panel.columns
     assert set(EXPECTED_COLUMNS).issuperset({"date", "origin", "destination", "rpm"})
+
+
+def test_build_modeling_panel_attaches_diesel() -> None:
+    from freight_rates.preprocessing import build_modeling_panel
+
+    rates = pd.DataFrame(
+        [
+            _raw_row(date="2025-01-07T00:00:00.000", week="2"),
+        ]
+    )
+    diesel = pd.DataFrame(
+        [
+            {
+                "date": "2024-12-30T00:00:00.000",
+                "week": "1",
+                "month": "12",
+                "year": "2024",
+                "region": "US",
+                "diesel_price": "3.55",
+            },
+            {
+                "date": "2025-01-06T00:00:00.000",
+                "week": "2",
+                "month": "1",
+                "year": "2025",
+                "region": "US",
+                "diesel_price": "3.75",
+            },
+        ]
+    )
+    panel = build_modeling_panel(rates, diesel, validate=False)
+    assert "diesel_us" in panel.columns
+    assert panel.loc[0, "diesel_date"] == pd.Timestamp("2024-12-30")
+    assert panel.loc[0, "diesel_us"] == pytest.approx(3.55)

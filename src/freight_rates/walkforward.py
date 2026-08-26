@@ -15,6 +15,16 @@ from freight_rates.evaluation import assign_history_bucket, summarize_prediction
 from freight_rates.features import TARGET_COLUMN, LaneWeekFeatureBuilder
 from freight_rates.splits import FIRST_FORECAST_DATE, WalkForwardFold, iter_walk_forward
 
+_GBM_PARAM_KEYS = frozenset(
+    {
+        "max_depth",
+        "min_samples_leaf",
+        "l2_regularization",
+        "learning_rate",
+        "max_iter",
+    }
+)
+
 
 @dataclass(frozen=True)
 class WalkForwardResult:
@@ -24,6 +34,7 @@ class WalkForwardResult:
     overall: pd.DataFrame
     by_week: pd.DataFrame
     by_history: pd.DataFrame
+    diesel_features: str = "level"
 
 
 def default_gbm(**overrides: Any) -> HistGradientBoostingRegressor:
@@ -45,13 +56,21 @@ def default_gbm(**overrides: Any) -> HistGradientBoostingRegressor:
     return HistGradientBoostingRegressor(**params)
 
 
+def load_hpo_best_params(path: Path | str) -> dict[str, Any]:
+    """Load GBM hyperparameters from nested HPO ``best_params.json``."""
+    series = pd.read_json(path, typ="series")
+    return {key: series[key] for key in _GBM_PARAM_KEYS if key in series.index}
+
+
 def run_walkforward_gbm(
     panel: pd.DataFrame,
     *,
     first_forecast_date: pd.Timestamp | str = FIRST_FORECAST_DATE,
+    last_forecast_date: pd.Timestamp | str | None = None,
     max_folds: int | None = None,
     model: HistGradientBoostingRegressor | None = None,
     residual_target: bool = True,
+    diesel_features: str = "level",
     verbose: bool = False,
 ) -> WalkForwardResult:
     """Train/score an expanding-window global GBM under Case B.
@@ -70,6 +89,9 @@ def run_walkforward_gbm(
         Lane-week panel already filtered to the modeling window.
     first_forecast_date:
         First week-ending Tuesday to score (default ``2025-01-07``).
+    last_forecast_date:
+        Optional inclusive upper bound on score weeks (nested val / test
+        windows). ``None`` scores through the end of the panel.
     max_folds:
         Optional cap on number of forecast weeks (smoke / debug).
     model:
@@ -79,13 +101,19 @@ def run_walkforward_gbm(
         When ``True`` (default), train on ``rpm - rpm_lag_1`` and reconstruct
         RPM predictions by adding the lag-1 baseline back. When ``False``,
         train directly on ``rpm``.
+    diesel_features:
+        Diesel ablation mode passed to :class:`LaneWeekFeatureBuilder`:
+        ``\"none\"``, ``\"level\"`` (``diesel_us`` + ``diesel_distance``), or
+        ``\"full\"`` (level + WoW change).
     verbose:
         Print progress every fold when True.
     """
     estimator = model if model is not None else default_gbm()
     rows: list[dict[str, Any]] = []
     folds: Iterator[WalkForwardFold] = iter_walk_forward(
-        panel, first_forecast_date=first_forecast_date
+        panel,
+        first_forecast_date=first_forecast_date,
+        last_forecast_date=last_forecast_date,
     )
 
     for i, fold in enumerate(folds):
@@ -100,7 +128,7 @@ def run_walkforward_gbm(
         if fold.train["date"].max() >= fold.t:
             raise RuntimeError(f"train leaks into/after score week t={fold.t}")
 
-        builder = LaneWeekFeatureBuilder()
+        builder = LaneWeekFeatureBuilder(diesel_features=diesel_features)
         builder.fit(fold.train)
 
         combined = pd.concat([fold.train, fold.score], axis=0)
@@ -177,6 +205,7 @@ def run_walkforward_gbm(
             overall=summaries["overall"],
             by_week=summaries["by_week"],
             by_history=summaries["by_history"],
+            diesel_features=diesel_features,
         )
 
     predictions = pd.DataFrame(rows)
@@ -187,6 +216,7 @@ def run_walkforward_gbm(
         overall=summaries["overall"],
         by_week=summaries["by_week"],
         by_history=summaries["by_history"],
+        diesel_features=diesel_features,
     )
 
 
