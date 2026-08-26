@@ -25,26 +25,23 @@ USDA AgTransport API
 
 **Selected source:** [Refrigerated Truck Rates and Availability](https://agtransport.usda.gov/Truck/Refrigerated-Truck-Rates-and-Availability/acar-e3r8) (`acar-e3r8`).
 
-This is the official weekly historical origin–destination series (rates, distance, availability, commodity) on USDA’s [Agricultural Transportation Open Data](https://agtransport.usda.gov/) platform. We prefer it over the quarterly aggregate O-D dataset ([`qm5q-5r5f`](https://agtransport.usda.gov/Truck/Quarterly-Refrigerated-Truck-Rates-by-Origin-Desti/qm5q-5r5f)) because it is more granular in time.
+This is the official **weekly** historical origin–destination series (rates, distance, availability, commodity) on USDA’s [Agricultural Transportation Open Data](https://agtransport.usda.gov/) platform, sourced from the AMS Specialty Crops [Fruit and Vegetable Truck Rate Report](https://www.ams.usda.gov/mnreports/fvwtrk.pdf) (FVWTRK).
 
 ### Scope: 10 USDA destination markets
 
-This project focuses on **weekly refrigerated truck rates from U.S. agricultural shipping areas to ten fixed wholesale destination markets** defined by USDA AMS methodology — not general freight to arbitrary U.S. cities.
+This project uses **only** the weekly `acar-e3r8` series: refrigerated truck spot rates from U.S. agricultural shipping areas to **ten fixed wholesale destination markets** — not general freight to arbitrary U.S. cities.
 
-USDA publishes rate data for **10 destination markets**, which are used to compute regional and national specialty-crop truck rates. See the [Agricultural Refrigerated Truck Quarterly Datasets](https://www.ams.usda.gov/services/transportation-analysis/agricultural-refrigerated-truck-quarterly-datasets) documentation:
-
-> *"Rate data for **10 destination markets** are used to calculate average origin regional rates."*
-
-Those destinations in our snapshot are: Atlanta, Baltimore, Boston, Chicago, Dallas, Los Angeles, Miami, New York, Philadelphia, and Seattle. **Origin districts (~107)** and **lanes (~800)** provide most of the cross-sectional variation; cold-start experiments target sparse or newly observed **lanes**, not new destination cities.
+Per the weekly FVWTRK methodology, rates are quoted to: Atlanta, Baltimore, Boston, Chicago, Dallas, Los Angeles, Miami, New York, Philadelphia, and Seattle. **Origin districts (~107)** and **lanes (~800)** provide most of the cross-sectional variation; cold-start experiments target sparse or newly observed **lanes**, not new destination cities.
 
 The curated modeling population is the **lane-week panel** (`date + origin + destination`), built from the raw snapshot via `build_lane_week_panel()` — one row per lane-week, with `rpm` aggregated by mean when reporting duplicates exist.
 
 ### Field glossary
 
-Definitions follow USDA AMS Specialty Crops Market News methodology ([Agricultural Refrigerated Truck Quarterly Datasets](https://www.ams.usda.gov/services/transportation-analysis/agricultural-refrigerated-truck-quarterly-datasets); weekly [Fruit and Vegetable Truck Rate Report](https://www.ams.usda.gov/mnreports/fvwtrk.pdf)).
+Definitions follow the weekly AMS Specialty Crops Market News [Fruit and Vegetable Truck Rate Report](https://www.ams.usda.gov/mnreports/fvwtrk.pdf) and the [`acar-e3r8`](https://agtransport.usda.gov/Truck/Refrigerated-Truck-Rates-and-Availability/acar-e3r8) catalog.
 
 | Field | Meaning |
 |---|---|
+| `date` | Report-week reference date (usually Tuesday) for the weekly spot quotes — not an individual shipment timestamp |
 | `origin` | Agricultural shipping district / producing area |
 | `destination` | One of the 10 wholesale receiving cities listed above |
 | `distance` | Typical haul miles from origin area to destination city |
@@ -55,7 +52,7 @@ Definitions follow USDA AMS Specialty Crops Market News methodology ([Agricultur
 | `availability` | Spot refrigerated-truck availability at origin (ordinal 1–5; see below) |
 | `region` | AMS Transportation Services regional assignment |
 
-**`availability` scale** (source: [Weekly Truck Availability by Origin and Commodity](https://www.ams.usda.gov/services/transportation-analysis/agricultural-refrigerated-truck-quarterly-datasets)):
+**`availability` scale** (labels as published in FVWTRK; numeric codes as stored in `acar-e3r8`):
 
 | Code | Label |
 |---:|---|
@@ -65,7 +62,7 @@ Definitions follow USDA AMS Specialty Crops Market News methodology ([Agricultur
 | 4 | Slight shortage |
 | 5 | Shortage |
 
-Rates are open (spot) market truckload quotes including broker fees for single-destination loads in 48–53 ft refrigerated trailers. For modeling, treat `weeklow`, `weekhigh`, and `midpoint` as **target leakage** if `rpm` is the outcome; `distance` and `availability` are legitimate pre-shipment features when known at prediction time.
+Rates are open (**spot**) market truckload quotes including broker fees for single-destination loads in 48–53 ft refrigerated trailers. For modeling, treat `weeklow`, `weekhigh`, and `midpoint` as **target leakage** if `rpm` is the outcome; `distance` and `availability` are legitimate pre-shipment features when known at prediction time. Same-week `availability` is published with the same weekly report as `rpm`, so realistic (Case B) prediction should use prior-week information only.
 
 ## Setup
 
