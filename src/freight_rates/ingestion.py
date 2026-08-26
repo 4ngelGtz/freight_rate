@@ -56,6 +56,9 @@ DEFAULT_RAW_DIR = Path("data") / "raw"
 DEFAULT_PARQUET_NAME = "usda_refrigerated_truck_rates.parquet"
 DEFAULT_METADATA_NAME = "usda_refrigerated_truck_rates.metadata.json"
 
+# Default API lower bound: burn-in before 2025 walk-forward forecasts.
+DEFAULT_START_DATE = "2024-07-01"
+
 
 class UsdaApiError(RuntimeError):
     """Raised when the USDA / Socrata API request fails."""
@@ -101,6 +104,30 @@ def validate_schema(
 # --- Fetch -------------------------------------------------------------------
 
 
+def _normalize_api_date(value: str | pd.Timestamp | datetime) -> str:
+    """Normalize a calendar date to SODA ``YYYY-MM-DDT00:00:00.000`` form."""
+    ts = pd.Timestamp(value)
+    if pd.isna(ts):
+        raise ValueError(f"Invalid date value: {value!r}")
+    return ts.strftime("%Y-%m-%dT00:00:00.000")
+
+
+def build_date_where_clause(
+    *,
+    start_date: str | pd.Timestamp | datetime | None = None,
+    end_date: str | pd.Timestamp | datetime | None = None,
+) -> str | None:
+    """Build a SODA ``$where`` filter on the ``date`` column."""
+    clauses: list[str] = []
+    if start_date is not None:
+        clauses.append(f"date >= '{_normalize_api_date(start_date)}'")
+    if end_date is not None:
+        clauses.append(f"date <= '{_normalize_api_date(end_date)}'")
+    if not clauses:
+        return None
+    return " AND ".join(clauses)
+
+
 def fetch_usda_data(
     *,
     endpoint: str = API_ENDPOINT,
@@ -108,6 +135,8 @@ def fetch_usda_data(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     session: requests.Session | None = None,
     max_rows: int | None = None,
+    start_date: str | pd.Timestamp | datetime | None = DEFAULT_START_DATE,
+    end_date: str | pd.Timestamp | datetime | None = None,
 ) -> pd.DataFrame:
     """Download records from the USDA SODA API with pagination.
 
@@ -123,6 +152,11 @@ def fetch_usda_data(
         Optional ``requests.Session`` (useful for tests / connection reuse).
     max_rows:
         Optional cap on total rows (for smoke tests). ``None`` fetches all.
+    start_date:
+        Inclusive lower bound on report ``date`` (week-ending Tuesday).
+        Defaults to :data:`DEFAULT_START_DATE`. Pass ``None`` for no lower bound.
+    end_date:
+        Inclusive upper bound on report ``date``. ``None`` means no upper bound.
 
     Returns
     -------
@@ -131,11 +165,15 @@ def fetch_usda_data(
     """
     if page_size <= 0:
         raise ValueError("page_size must be positive")
+    if start_date is not None and end_date is not None:
+        if pd.Timestamp(start_date) > pd.Timestamp(end_date):
+            raise ValueError("start_date must be <= end_date")
 
     own_session = session is None
     http = session or requests.Session()
     records: list[dict[str, Any]] = []
     offset = 0
+    where = build_date_where_clause(start_date=start_date, end_date=end_date)
 
     try:
         while True:
@@ -146,7 +184,9 @@ def fetch_usda_data(
                     break
                 limit = min(page_size, remaining)
 
-            params = {"$limit": limit, "$offset": offset, "$order": ":id"}
+            params: dict[str, Any] = {"$limit": limit, "$offset": offset, "$order": ":id"}
+            if where is not None:
+                params["$where"] = where
             try:
                 response = http.get(endpoint, params=params, timeout=timeout)
             except requests.Timeout as exc:
@@ -210,6 +250,12 @@ def _infer_date_bounds(df: pd.DataFrame) -> tuple[str | None, str | None]:
     )
 
 
+def _date_bound_iso(value: str | pd.Timestamp | datetime | None) -> str | None:
+    if value is None:
+        return None
+    return pd.Timestamp(value).date().isoformat()
+
+
 def build_metadata(
     df: pd.DataFrame,
     *,
@@ -218,6 +264,8 @@ def build_metadata(
     api_endpoint: str = API_ENDPOINT,
     dataset_id: str = DATASET_ID,
     download_timestamp_utc: str | None = None,
+    query_start_date: str | pd.Timestamp | datetime | None = None,
+    query_end_date: str | pd.Timestamp | datetime | None = None,
 ) -> dict[str, Any]:
     """Build a metadata dict for the raw snapshot."""
     min_date, max_date = _infer_date_bounds(df)
@@ -232,6 +280,8 @@ def build_metadata(
         "column_names": list(df.columns),
         "min_date": min_date,
         "max_date": max_date,
+        "query_start_date": _date_bound_iso(query_start_date),
+        "query_end_date": _date_bound_iso(query_end_date),
     }
 
 
@@ -291,8 +341,10 @@ def download_and_snapshot(
     timeout: float = DEFAULT_TIMEOUT_SECONDS,
     session: requests.Session | None = None,
     max_rows: int | None = None,
+    start_date: str | pd.Timestamp | datetime | None = DEFAULT_START_DATE,
+    end_date: str | pd.Timestamp | datetime | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any], Path, Path]:
-    """Fetch, validate, and persist a full (or capped) raw snapshot.
+    """Fetch, validate, and persist a raw snapshot (optionally date-filtered).
 
     Returns ``(dataframe, metadata, parquet_path, metadata_path)``.
     """
@@ -301,8 +353,14 @@ def download_and_snapshot(
         timeout=timeout,
         session=session,
         max_rows=max_rows,
+        start_date=start_date,
+        end_date=end_date,
     )
     validate_schema(df)
-    metadata = build_metadata(df)
+    metadata = build_metadata(
+        df,
+        query_start_date=start_date,
+        query_end_date=end_date,
+    )
     parquet_path, metadata_path = save_raw_snapshot(df, raw_dir=raw_dir, metadata=metadata)
     return df, metadata, parquet_path, metadata_path

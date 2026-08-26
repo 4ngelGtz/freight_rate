@@ -14,6 +14,7 @@ from freight_rates.ingestion import (
     SchemaValidationError,
     UsdaApiError,
     add_lane_id,
+    build_date_where_clause,
     build_metadata,
     fetch_usda_data,
     make_lane_id,
@@ -85,6 +86,8 @@ def test_build_metadata() -> None:
     meta = build_metadata(
         df,
         download_timestamp_utc="2026-01-01T00:00:00Z",
+        query_start_date="2024-07-01",
+        query_end_date=None,
     )
     assert meta["source_name"] == "Refrigerated Truck Rates and Availability"
     assert meta["dataset_id"] == "acar-e3r8"
@@ -93,8 +96,22 @@ def test_build_metadata() -> None:
     assert meta["download_timestamp_utc"] == "2026-01-01T00:00:00Z"
     assert meta["min_date"] == "2000-01-04"
     assert meta["max_date"] == "2000-01-05"
+    assert meta["query_start_date"] == "2024-07-01"
+    assert meta["query_end_date"] is None
     assert "api_endpoint" in meta
     assert "source_url" in meta
+
+
+def test_build_date_where_clause() -> None:
+    assert build_date_where_clause() is None
+    assert (
+        build_date_where_clause(start_date="2024-07-01")
+        == "date >= '2024-07-01T00:00:00.000'"
+    )
+    assert (
+        build_date_where_clause(start_date="2024-07-01", end_date="2025-12-31")
+        == "date >= '2024-07-01T00:00:00.000' AND date <= '2025-12-31T00:00:00.000'"
+    )
 
 
 def test_save_raw_snapshot(tmp_path: Path) -> None:
@@ -139,12 +156,42 @@ def test_fetch_usda_data_paginates() -> None:
     session = MagicMock()
     session.get.side_effect = responses
 
-    df = fetch_usda_data(session=session, page_size=2, timeout=5.0)
+    df = fetch_usda_data(session=session, page_size=2, timeout=5.0, start_date=None)
     assert len(df) == 4
     assert session.get.call_count == 3
     assert session.get.call_args_list[0].kwargs["params"]["$offset"] == 0
     assert session.get.call_args_list[1].kwargs["params"]["$offset"] == 2
     assert session.get.call_args_list[2].kwargs["params"]["$offset"] == 4
+    assert "$where" not in session.get.call_args_list[0].kwargs["params"]
+
+
+def test_fetch_usda_data_applies_start_date_where() -> None:
+    resp = MagicMock()
+    resp.ok = True
+    resp.json.return_value = []
+    session = MagicMock()
+    session.get.return_value = resp
+
+    fetch_usda_data(session=session, page_size=10, start_date="2024-07-01")
+    params = session.get.call_args.kwargs["params"]
+    assert params["$where"] == "date >= '2024-07-01T00:00:00.000'"
+
+
+def test_fetch_usda_data_default_start_date_where() -> None:
+    resp = MagicMock()
+    resp.ok = True
+    resp.json.return_value = []
+    session = MagicMock()
+    session.get.return_value = resp
+
+    fetch_usda_data(session=session, page_size=10)
+    params = session.get.call_args.kwargs["params"]
+    assert params["$where"] == "date >= '2024-07-01T00:00:00.000'"
+
+
+def test_fetch_usda_data_rejects_inverted_bounds() -> None:
+    with pytest.raises(ValueError, match="start_date must be"):
+        fetch_usda_data(start_date="2025-01-01", end_date="2024-01-01", session=MagicMock())
 
 
 def test_fetch_usda_data_stops_on_short_page() -> None:
@@ -161,7 +208,7 @@ def test_fetch_usda_data_stops_on_short_page() -> None:
     session = MagicMock()
     session.get.side_effect = responses
 
-    df = fetch_usda_data(session=session, page_size=2, timeout=5.0)
+    df = fetch_usda_data(session=session, page_size=2, timeout=5.0, start_date=None)
     assert len(df) == 3
     assert session.get.call_count == 2
 
@@ -176,5 +223,5 @@ def test_fetch_usda_data_http_error() -> None:
     session.get.return_value = resp
 
     with pytest.raises(UsdaApiError) as exc_info:
-        fetch_usda_data(session=session, page_size=10)
+        fetch_usda_data(session=session, page_size=10, start_date=None)
     assert "HTTP 500" in str(exc_info.value)

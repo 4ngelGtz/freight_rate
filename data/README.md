@@ -27,10 +27,10 @@ From the repository root (with the package installed):
 python scripts/download_usda_data.py
 ```
 
-This writes:
+Default fetch uses **`date >= 2024-07-01`**. Override with `--start-date` / `--end-date`. This writes:
 
 - `raw/usda_refrigerated_truck_rates.parquet`
-- `raw/usda_refrigerated_truck_rates.metadata.json`
+- `raw/usda_refrigerated_truck_rates.metadata.json` (includes `query_start_date` / `query_end_date`)
 
 ## Git policy
 

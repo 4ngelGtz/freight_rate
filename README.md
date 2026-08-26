@@ -41,7 +41,7 @@ Definitions follow the weekly AMS Specialty Crops Market News [Fruit and Vegetab
 
 | Field | Meaning |
 |---|---|
-| `date` | Report-week reference date (usually Tuesday) for the weekly spot quotes — not an individual shipment timestamp |
+| `date` | Week-ending Tuesday for the weekly spot quotes — not an individual shipment timestamp |
 | `origin` | Agricultural shipping district / producing area |
 | `destination` | One of the 10 wholesale receiving cities listed above |
 | `distance` | Typical haul miles from origin area to destination city |
@@ -51,6 +51,8 @@ Definitions follow the weekly AMS Specialty Crops Market News [Fruit and Vegetab
 | `rpm` | Rate per mile ($/mile) — modeling target; reconstructs as `midpoint / distance` |
 | `availability` | Spot refrigerated-truck availability at origin (ordinal 1–5; see below) |
 | `region` | AMS Transportation Services regional assignment |
+
+**Week window for `date`:** FVWTRK labels each report as *week ending Tuesday*. A row with `date = 2026-08-18` covers roughly **Aug 12–18** (prior Wednesday through that Tuesday), not Aug 18–24. One-step-ahead prediction of `date = 2026-08-25` therefore targets the next week-ending Tuesday (rates for ~Aug 19–25), using only information available through the prior week-ending Tuesday.
 
 **`availability` scale** (labels as published in FVWTRK; numeric codes as stored in `acar-e3r8`):
 
@@ -78,12 +80,22 @@ pip install -e .
 python scripts/download_usda_data.py
 ```
 
-This fetches the full dataset via the Socrata SODA API, validates the schema, and writes:
+By default this fetches rows with **`date >= 2024-07-01`** (burn-in before 2025 walk-forward forecasts) via the Socrata SODA API, validates the schema, and writes:
 
 - `data/raw/usda_refrigerated_truck_rates.parquet`
-- `data/raw/usda_refrigerated_truck_rates.metadata.json`
+- `data/raw/usda_refrigerated_truck_rates.metadata.json` (includes `query_start_date` / `query_end_date`)
+
+Options:
+
+```bash
+python scripts/download_usda_data.py --start-date 2024-07-01
+python scripts/download_usda_data.py --start-date 2000-01-01          # full history
+python scripts/download_usda_data.py --start-date 2024-07-01 --end-date 2025-12-31
+```
 
 Raw and processed files are gitignored; regenerate them locally with the command above.
+
+**Modeling window:** API/raw snapshot starts at mid-2024; walk-forward forecasts begin at the first week-ending Tuesday of **2025** (`2025-01-07`), expanding within the downloaded history only.
 
 ## Project layout
 
