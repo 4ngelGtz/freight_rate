@@ -1,0 +1,191 @@
+"""Expanding-window walk-forward training for a global GBM (Case B)."""
+
+from __future__ import annotations
+
+from collections.abc import Iterator
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import HistGradientBoostingRegressor
+
+from freight_rates.evaluation import assign_history_bucket, summarize_predictions
+from freight_rates.features import TARGET_COLUMN, LaneWeekFeatureBuilder
+from freight_rates.splits import FIRST_FORECAST_DATE, WalkForwardFold, iter_walk_forward
+
+
+@dataclass(frozen=True)
+class WalkForwardResult:
+    """Predictions and metric tables from a walk-forward run."""
+
+    predictions: pd.DataFrame
+    overall: pd.DataFrame
+    by_week: pd.DataFrame
+    by_history: pd.DataFrame
+
+
+def default_gbm(**overrides: Any) -> HistGradientBoostingRegressor:
+    """HistGradientBoostingRegressor with modest defaults for weekly re-fits."""
+    params: dict[str, Any] = {
+        "loss": "squared_error",
+        "learning_rate": 0.08,
+        "max_iter": 200,
+        "max_depth": 6,
+        "min_samples_leaf": 20,
+        "l2_regularization": 0.1,
+        "random_state": 42,
+    }
+    params.update(overrides)
+    return HistGradientBoostingRegressor(**params)
+
+
+def run_walkforward_gbm(
+    panel: pd.DataFrame,
+    *,
+    first_forecast_date: pd.Timestamp | str = FIRST_FORECAST_DATE,
+    max_folds: int | None = None,
+    model: HistGradientBoostingRegressor | None = None,
+    verbose: bool = False,
+) -> WalkForwardResult:
+    """Train/score an expanding-window global GBM under Case B.
+
+    For each forecast Tuesday ``t``:
+
+    - fit :class:`LaneWeekFeatureBuilder` on ``date < t`` only
+    - transform train+score together so lags see prior history
+    - fit GBM on train features; predict score rows
+    - baseline = ``rpm_lag_1`` (train global mean fill when no history)
+
+    Parameters
+    ----------
+    panel:
+        Lane-week panel already filtered to the modeling window.
+    first_forecast_date:
+        First week-ending Tuesday to score (default ``2025-01-07``).
+    max_folds:
+        Optional cap on number of forecast weeks (smoke / debug).
+    model:
+        Optional pre-configured regressor; a fresh clone is not required —
+        the same estimator instance is re-fit each fold.
+    verbose:
+        Print progress every fold when True.
+    """
+    estimator = model if model is not None else default_gbm()
+    rows: list[dict[str, Any]] = []
+    folds: Iterator[WalkForwardFold] = iter_walk_forward(
+        panel, first_forecast_date=first_forecast_date
+    )
+
+    for i, fold in enumerate(folds):
+        if max_folds is not None and i >= max_folds:
+            break
+        if fold.train.empty:
+            if verbose:
+                print(f"skip {fold.t.date()}: empty train")
+            continue
+
+        # Sanity: Case B expanding window — no future leakage into train.
+        if fold.train["date"].max() >= fold.t:
+            raise RuntimeError(f"train leaks into/after score week t={fold.t}")
+
+        builder = LaneWeekFeatureBuilder()
+        builder.fit(fold.train)
+
+        combined = pd.concat([fold.train, fold.score], axis=0)
+        features = builder.transform(combined)
+        x_train = features.loc[fold.train.index]
+        x_score = features.loc[fold.score.index]
+        y_train = fold.train[TARGET_COLUMN].astype(float)
+
+        estimator.fit(x_train, y_train)
+        y_pred = np.asarray(estimator.predict(x_score), dtype=float)
+        y_true = fold.score[TARGET_COLUMN].astype(float).to_numpy()
+        y_base = x_score["rpm_lag_1"].to_numpy(dtype=float)
+        lane_hist = x_score["lane_history_n"].to_numpy(dtype=float)
+
+        score = fold.score.reset_index(drop=True)
+        if "lane_id" in fold.score.columns:
+            lane_ids = fold.score["lane_id"].astype(str).to_numpy()
+        else:
+            lane_ids = (
+                fold.score["origin"].astype(str) + " -> " + fold.score["destination"].astype(str)
+            ).to_numpy()
+
+        fold_frame = pd.DataFrame(
+            {
+                "date": fold.t,
+                "lane_id": lane_ids,
+                "origin": fold.score["origin"].to_numpy(),
+                "destination": fold.score["destination"].to_numpy(),
+                "y_true": y_true,
+                "y_pred": y_pred,
+                "y_pred_baseline": y_base,
+                "lane_history_n": lane_hist,
+                "residual": y_true - y_pred,
+            }
+        )
+        rows.extend(fold_frame.to_dict(orient="records"))
+
+        if verbose:
+            fold_mae = float(np.mean(np.abs(y_true - y_pred)))
+            print(
+                f"fold {i + 1}: t={fold.t.date()}  "
+                f"train={len(fold.train)}  score={len(score)}  mae={fold_mae:.4f}"
+            )
+
+    if not rows:
+        empty = pd.DataFrame(
+            columns=[
+                "date",
+                "lane_id",
+                "origin",
+                "destination",
+                "y_true",
+                "y_pred",
+                "y_pred_baseline",
+                "lane_history_n",
+                "residual",
+                "history_bucket",
+            ]
+        )
+        summaries = summarize_predictions(empty)
+        return WalkForwardResult(
+            predictions=empty,
+            overall=summaries["overall"],
+            by_week=summaries["by_week"],
+            by_history=summaries["by_history"],
+        )
+
+    predictions = pd.DataFrame(rows)
+    predictions["history_bucket"] = assign_history_bucket(predictions["lane_history_n"])
+    summaries = summarize_predictions(predictions)
+    return WalkForwardResult(
+        predictions=predictions,
+        overall=summaries["overall"],
+        by_week=summaries["by_week"],
+        by_history=summaries["by_history"],
+    )
+
+
+def save_walkforward_outputs(
+    result: WalkForwardResult,
+    output_dir: Path | str,
+    *,
+    prefix: str = "walkforward_gbm",
+) -> dict[str, Path]:
+    """Write predictions parquet and metric CSVs under ``output_dir``."""
+    out = Path(output_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "predictions": out / f"{prefix}_predictions.parquet",
+        "overall": out / f"{prefix}_metrics_overall.csv",
+        "by_week": out / f"{prefix}_metrics_by_week.csv",
+        "by_history": out / f"{prefix}_metrics_by_history.csv",
+    }
+    result.predictions.to_parquet(paths["predictions"], index=False)
+    result.overall.to_csv(paths["overall"], index=False)
+    result.by_week.to_csv(paths["by_week"], index=False)
+    result.by_history.to_csv(paths["by_history"], index=False)
+    return paths

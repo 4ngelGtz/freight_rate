@@ -35,6 +35,10 @@ data/raw/*
 data/processed/*
 !data/processed/.gitkeep
 
+# Model artifacts / walk-forward outputs
+models/*
+!models/.gitkeep
+
 # Environment / secrets
 .env
 .env.*

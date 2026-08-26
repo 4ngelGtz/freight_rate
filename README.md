@@ -8,10 +8,8 @@ Build a reproducible pipeline to predict refrigerated truck rates at the origin�
 
 ## Planned model comparison
 
-1. **Global Gradient Boosting** — a single model across all lanes
-2. **Hierarchical Bayesian model** — partial pooling for sparse / new lanes
-
-Modeling libraries are intentionally not included yet; this repository currently covers project layout and data ingestion only.
+1. **Global Gradient Boosting** — expanding-window walk-forward (`scripts/train_walkforward_gbm.py`, `freight_rates.walkforward`)
+2. **Hierarchical Bayesian model** — partial pooling for sparse / new lanes (not implemented yet)
 
 ## Data pipeline
 
@@ -64,7 +62,7 @@ Definitions follow the weekly AMS Specialty Crops Market News [Fruit and Vegetab
 | 4 | Slight shortage |
 | 5 | Shortage |
 
-Rates are open (**spot**) market truckload quotes including broker fees for single-destination loads in 48–53 ft refrigerated trailers. For modeling, treat `weeklow`, `weekhigh`, and `midpoint` as **target leakage** if `rpm` is the outcome; `distance` and `availability` are legitimate pre-shipment features when known at prediction time. Same-week `availability` is published with the same weekly report as `rpm`, so realistic (Case B) prediction should use prior-week information only.
+Rates are open (**spot**) market truckload quotes including broker fees for single-destination loads in 48–53 ft refrigerated trailers. For modeling, treat `weeklow`, `weekhigh`, and `midpoint` as **target leakage** if `rpm` is the outcome; `distance` is a legitimate ex-ante feature. Same-week `availability` is published with the same weekly report as `rpm`, so under Case B the feature builder uses **`availability_lag_1`** (prior week only; train median fill for cold start) — never contemporaneous `availability`.
 
 ## Setup
 
@@ -95,13 +93,20 @@ python scripts/download_usda_data.py --start-date 2024-07-01 --end-date 2025-12-
 
 Raw and processed files are gitignored; regenerate them locally with the command above.
 
-**Modeling window:** API/raw snapshot starts at mid-2024; walk-forward forecasts begin at the first week-ending Tuesday of **2025** (`2025-01-07`), expanding within the downloaded history only.
+**Modeling window:** API/raw snapshot starts at mid-2024; walk-forward forecasts begin at the first week-ending Tuesday of **2025** (`2025-01-07`), expanding within the downloaded history only. Official eval is expanding-window walk-forward via `freight_rates.splits.iter_walk_forward` (train `date < t`, score `date == t`); fixed train/val/test cutoffs in that module are diagnostic only.
+
+```bash
+python scripts/train_walkforward_gbm.py
+```
+
+Writes predictions and metric CSVs under `models/walkforward_gbm/` (gitignored). Baseline is prior-week `rpm_lag_1` (train global mean when a lane has no history).
 
 ## Project layout
 
 ```
 freight-rate/
 ├── data/                  # raw / processed snapshots (not committed)
+├── models/                # walk-forward predictions / metrics (not committed)
 ├── notebooks/             # exploration notebooks
 ├── scripts/               # CLI entry points
 ├── src/freight_rates/     # reusable package
