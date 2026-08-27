@@ -2,6 +2,25 @@
 
 Lane-level refrigerated truck rate prediction with cold-start focus, using USDA `acar-e3r8` + EIA diesel (`x88w-atzp`).
 
+## Executive summary
+
+**Problem:** predict weekly refrigerated truck rates (`rpm`, $/mile) for origin→destination **lanes**. Many lanes have little history (“cold start”); a strong lag-1 baseline is hard to beat everywhere, but the GBM should help on sparse lanes.
+
+**Model:** global `HistGradientBoostingRegressor`, re-fit each week on all history `date < t` with fixed hyperparameters θ* from Hyper Parameter Optimization. Trains on the residual `rpm − rpm_lag_1` and adds the prediction back to the lag-1 baseline. Features: lane OD, distance, calendar, lagged RPM/availability, diesel (Case-B as-of).
+
+**Evaluation (Case B):** expanding walk-forward — train past only, score week `t`. HPO picks θ* on val (`2025-01-07` → `2025-06-24`); test (`≥ 2025-07-01`) is scored once in the full walk-forward run.
+
+**Success metric (“dual-regime”):** we report MAE in two regimes, not a single number:
+
+| Regime | Who | Question |
+|---|---|---|
+| **Overall** | all lane-weeks | Does the GBM beat lag-1 on average? (`mae_lift = MAE_baseline − MAE_model`) |
+| **Cold-start** | lanes with ≤4 prior weeks (`history_bucket` 0–4) | Does the GBM beat lag-1 where history is thin? |
+
+θ* is chosen on val with **cold-start lift ≥ 0**, then lowest overall MAE. The model is not expected to beat lag-1 on every lane-week; cold-start lift is the primary design goal.
+
+**Operations:** `make pipeline` = offline backtest; `make score` = weekly forward forecast for the **next** Tuesday after the latest USDA data (see [Scoring pipeline](#scoring-pipeline)).
+
 ## Setup
 
 ```bash
@@ -31,11 +50,9 @@ make pipeline-smoke        # fast check (2 HPO configs, 3 folds)
 
 Equivalent one-liner: `python scripts/run_pipeline.py` (same steps as `make pipeline`).
 
-**Protocol (Case B):** expanding walk-forward — train `date < t`, score `date == t` from `2025-01-07`. Residual target `rpm − rpm_lag_1`; baseline = lag-1. Diesel always included (`diesel_us`, `diesel_distance`) with as-of lag.
-
 **HPO:** tune θ* on val (`2025-01-07` → `2025-06-24`). Test (`≥ 2025-07-01`) scored only in `walkforward`.
 
-**Headline metric:** dual-regime — overall MAE lift + cold-start 0–4 lift.
+See [Executive summary](#executive-summary) for protocol and dual-regime metrics in full.
 
 ## Recommended operational cadence
 
