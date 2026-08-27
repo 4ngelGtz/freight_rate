@@ -38,6 +38,7 @@ data/processed/*
 # Model artifacts / walk-forward outputs
 models/*
 !models/.gitkeep
+!models/README.md
 
 # Environment / secrets
 .env
