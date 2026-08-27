@@ -1,8 +1,7 @@
-# GBM training pipeline — see README.md for full docs
+# GBM training pipeline — mirrors scripts/run_pipeline.py
 #
 #   make help              list targets (default)
-#   make pipeline          download → HPO → walk-forward → manifest  (backtest)
-#   make score             download → forward forecast next Tuesday  (ops)
+#   make pipeline          download → HPO → walk-forward → manifest
 #   make pipeline-smoke    fast sanity check (2 HPO configs, 3 folds)
 
 PYTHON ?= .venv/bin/python
