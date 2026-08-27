@@ -5,6 +5,7 @@ from __future__ import annotations
 import pandas as pd
 
 from freight_rates.features import TARGET_COLUMN
+from freight_rates.preprocessing import extend_panel_for_forecast
 from freight_rates.splits import iter_walk_forward
 from freight_rates.walkforward import default_gbm, load_hpo_best_params, run_walkforward_gbm
 
@@ -94,4 +95,20 @@ def test_walkforward_single_week_score() -> None:
     )
     assert len(result.predictions) == 1
     assert set(result.predictions["date"]) == {t}
+    assert result.predictions["y_pred"].notna().all()
+
+
+def test_walkforward_forward_week_with_scaffold() -> None:
+    panel = _panel()
+    t = pd.Timestamp("2025-01-28")
+    extended = extend_panel_for_forecast(panel, t)
+    result = run_walkforward_gbm(
+        extended,
+        first_forecast_date=t,
+        last_forecast_date=t,
+        model=default_gbm(max_iter=15, max_depth=2, min_samples_leaf=1),
+    )
+    assert len(result.predictions) == 1
+    assert set(result.predictions["date"]) == {t}
+    assert pd.isna(result.predictions["y_true"].iloc[0])
     assert result.predictions["y_pred"].notna().all()

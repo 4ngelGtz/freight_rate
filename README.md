@@ -40,23 +40,25 @@ Equivalent one-liner: `python scripts/run_pipeline.py` (same steps as `make pipe
 ## Recommended operational cadence
 
 1. **Tune θ* (infrequent):** run `make hpo` on the validation window when you want to refresh hyperparameters (not every week).
-2. **Score weekly (each USDA release):** re-fit the GBM on all history `date < t` with fixed θ* from `models/nested_hpo/best_params.json`, then predict lanes for `date == t`.
+2. **Score weekly (each USDA release):** after downloading the latest published week, re-fit the GBM on all history `date < t` with fixed θ*, then predict the **next** week-ending Tuesday (`t = last_observed + 7 days`).
 3. **Re-tune θ* only** when validation performance drifts — the weekly step keeps θ* fixed.
 
 ```bash
-make score                 # download → score latest week
+make score                 # download → score next Tuesday (forward forecast)
 make score-no-download     # score with existing data/raw/
-python scripts/score_week.py --date 2025-08-26   # specific week
+python scripts/score_week.py --date 2026-08-25   # specific week
 ```
 
 ## Scoring pipeline
 
 | Target | Script | What it does | Output |
 |---|---|---|---|
-| `score` | `score_week.py` | Download fresh snapshots, re-fit GBM on `date < t` with θ*, predict `date == t` (latest week by default) | `models/score/score_*_predictions.parquet`, `latest_predictions.parquet`, `latest.json` |
+| `score` | `score_week.py` | Download fresh snapshots, re-fit GBM on `date < t` with θ*, predict the **next** week-ending Tuesday after the latest USDA data (scaffold lanes from last observed week) | `models/score/score_*_predictions.parquet`, `latest_predictions.parquet`, `latest.json` |
 | `score-no-download` | `score_week.py` | Same without download | same |
 
 Requires `models/nested_hpo/best_params.json` from `make hpo` (or `make pipeline`).
+
+**Example:** data through `2026-08-18` → `make score` forecasts `2026-08-25` (73 lanes, no `y_true` yet).
 
 ## Artifacts (`models/`, gitignored)
 

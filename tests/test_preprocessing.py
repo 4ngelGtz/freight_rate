@@ -9,8 +9,11 @@ from freight_rates.ingestion import EXPECTED_COLUMNS, SchemaValidationError
 from freight_rates.preprocessing import (
     LANE_WEEK_KEY,
     LEAKAGE_COLUMNS,
+    build_forecast_scaffold,
     build_lane_week_panel,
+    build_modeling_panel,
     coerce_raw_numeric,
+    extend_panel_for_forecast,
 )
 
 
@@ -159,3 +162,58 @@ def test_build_modeling_panel_attaches_diesel() -> None:
     assert "diesel_us" in panel.columns
     assert panel.loc[0, "diesel_date"] == pd.Timestamp("2024-12-30")
     assert panel.loc[0, "diesel_us"] == pytest.approx(3.55)
+
+
+def _rates_and_diesel() -> tuple[pd.DataFrame, pd.DataFrame]:
+    rates = pd.DataFrame(
+        [
+            _raw_row(date="2025-01-07T00:00:00.000", rpm="2.0"),
+            _raw_row(date="2025-01-14T00:00:00.000", rpm="2.1"),
+        ]
+    )
+    diesel = pd.DataFrame(
+        [
+            {
+                "date": "2024-12-30T00:00:00.000",
+                "week": "1",
+                "month": "12",
+                "quarter": "4",
+                "year": "2024",
+                "region": "US",
+                "diesel_price": "3.55",
+            },
+            {
+                "date": "2025-01-06T00:00:00.000",
+                "week": "2",
+                "month": "1",
+                "quarter": "1",
+                "year": "2025",
+                "region": "US",
+                "diesel_price": "3.75",
+            },
+        ]
+    )
+    return rates, diesel
+
+
+def test_build_forecast_scaffold_forward_week() -> None:
+    rates, diesel = _rates_and_diesel()
+    panel = build_modeling_panel(rates, diesel, validate=False)
+    scaffold = build_forecast_scaffold(panel, "2025-01-21", diesel_raw=diesel)
+
+    assert len(scaffold) == len(panel.loc[panel["date"] == pd.Timestamp("2025-01-14")])
+    assert scaffold["date"].nunique() == 1
+    assert pd.Timestamp(scaffold["date"].iloc[0]) == pd.Timestamp("2025-01-21")
+    assert scaffold["rpm"].isna().all()
+    assert scaffold["diesel_us"].notna().all()
+
+
+def test_extend_panel_for_forecast_appends_scaffold() -> None:
+    rates, diesel = _rates_and_diesel()
+    panel = build_modeling_panel(rates, diesel, validate=False)
+    extended = extend_panel_for_forecast(panel, "2025-01-21", diesel_raw=diesel)
+
+    assert len(extended) == len(panel) + len(
+        panel.loc[panel["date"] == pd.Timestamp("2025-01-14")]
+    )
+    assert (extended["date"] == pd.Timestamp("2025-01-21")).any()

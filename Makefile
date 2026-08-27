@@ -31,8 +31,8 @@ help:
 	@echo "  pipeline              download + hpo + walkforward + manifest"
 	@echo "  pipeline-no-download  hpo + walkforward + manifest (data already local)"
 	@echo "  pipeline-smoke        pipeline with --max-configs 2 --max-folds 3"
-	@echo "  score                 download + score latest week with θ*"
-	@echo "  score-no-download     score latest week (data already local)"
+	@echo "  score                 download + score next Tuesday (forward forecast, θ*)"
+	@echo "  score-no-download     score next Tuesday (data already local)"
 	@echo "  hpo-smoke / walkforward-smoke   individual smoke steps"
 	@echo "  test / lint           pytest / ruff"
 

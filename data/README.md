@@ -41,3 +41,7 @@ Writes under `data/raw/`:
 ## Git policy
 
 `data/raw/` and `data/processed/` are not committed. Regenerate with `make download`.
+
+## Operational scoring
+
+`make score` uses the latest week-ending Tuesday in `data/raw/` as **last observed**, then forecasts the **next** Tuesday (e.g. data through `2026-08-18` → predict `2026-08-25`). Lane scaffolds for the forecast week copy origin/destination/distance from the last observed week.

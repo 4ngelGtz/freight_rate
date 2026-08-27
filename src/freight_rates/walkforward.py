@@ -149,7 +149,7 @@ def run_walkforward_gbm(
             y_pred = np.asarray(estimator.predict(x_score), dtype=float)
             delta_hat = y_pred - y_base
 
-        y_true = fold.score[TARGET_COLUMN].astype(float).to_numpy()
+        y_true = pd.to_numeric(fold.score[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float)
         lane_hist = x_score["lane_history_n"].to_numpy(dtype=float)
 
         score = fold.score.reset_index(drop=True)

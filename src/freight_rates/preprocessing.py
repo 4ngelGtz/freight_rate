@@ -5,10 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
+import numpy as np
 import pandas as pd
 
 from freight_rates.diesel import attach_diesel_asof, load_diesel_snapshot
 from freight_rates.ingestion import DEFAULT_RAW_DIR, add_lane_id, validate_schema
+from freight_rates.splits import last_observed_date
 
 LANE_WEEK_KEY: Final[tuple[str, ...]] = ("date", "origin", "destination")
 
@@ -126,3 +128,78 @@ def build_modeling_panel(
     )
     diesel = diesel_raw if diesel_raw is not None else load_diesel_snapshot(raw_dir=raw_dir)
     return attach_diesel_asof(panel, diesel)
+
+
+def build_forecast_scaffold(
+    panel: pd.DataFrame,
+    forecast_date: pd.Timestamp | str,
+    *,
+    diesel_raw: pd.DataFrame | None = None,
+    raw_dir: Path | str = DEFAULT_RAW_DIR,
+) -> pd.DataFrame:
+    """Build lane-week rows for a forward forecast week not yet in ``panel``.
+
+    Lanes are taken from the latest observed week. ``rpm`` and ``availability``
+    are left missing — they are not used for Case B feature lags on week ``t``.
+    """
+    t = pd.Timestamp(forecast_date)
+    work = panel.copy()
+    work["date"] = pd.to_datetime(work["date"])
+
+    last_date = last_observed_date(work)
+    if t <= last_date:
+        raise ValueError(
+            f"forecast_date {t.date()} must be after last observed week {last_date.date()}"
+        )
+
+    template = work.loc[work["date"] == last_date].copy()
+    if template.empty:
+        raise ValueError("Cannot build forecast scaffold: no lanes on last observed week")
+
+    scaffold = template.drop(
+        columns=[
+            "date",
+            "rpm",
+            "availability",
+            "diesel_us",
+            "diesel_us_chg_1w",
+            "diesel_date",
+            "rpm_conflict",
+            "raw_rows_in_group",
+            "commodity_count",
+            "region_count",
+        ],
+        errors="ignore",
+    )
+    scaffold["date"] = t
+    scaffold["year"] = t.year
+    scaffold["month"] = t.month
+    scaffold["week"] = int(t.isocalendar().week)
+    scaffold["quarter"] = (t.month - 1) // 3 + 1
+    scaffold["rpm"] = np.nan
+    scaffold["availability"] = np.nan
+
+    diesel = diesel_raw if diesel_raw is not None else load_diesel_snapshot(raw_dir=raw_dir)
+    scaffold = attach_diesel_asof(scaffold, diesel)
+    return scaffold.reset_index(drop=True)
+
+
+def extend_panel_for_forecast(
+    panel: pd.DataFrame,
+    forecast_date: pd.Timestamp | str,
+    *,
+    diesel_raw: pd.DataFrame | None = None,
+    raw_dir: Path | str = DEFAULT_RAW_DIR,
+) -> pd.DataFrame:
+    """Return ``panel`` with scaffold rows appended when ``forecast_date`` is missing."""
+    t = pd.Timestamp(forecast_date)
+    work = panel.copy()
+    work["date"] = pd.to_datetime(work["date"])
+    if (work["date"] == t).any():
+        return work.reset_index(drop=True)
+
+    scaffold = build_forecast_scaffold(work, t, diesel_raw=diesel_raw, raw_dir=raw_dir)
+    extended = pd.concat([work, scaffold], ignore_index=True)
+    return extended.sort_values(["date", "origin", "destination"], kind="mergesort").reset_index(
+        drop=True
+    )

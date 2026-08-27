@@ -75,33 +75,44 @@ def assign_temporal_split(dates: pd.Series) -> pd.Series:
     return out
 
 
+def last_observed_date(panel: pd.DataFrame) -> pd.Timestamp:
+    """Latest week-ending Tuesday present in ``panel``."""
+    if "date" not in panel.columns:
+        raise KeyError("panel must include a 'date' column")
+    dates = pd.to_datetime(panel["date"])
+    if dates.empty:
+        raise ValueError("panel has no dates")
+    return pd.Timestamp(dates.max())
+
+
 def resolve_forecast_date(
     panel: pd.DataFrame,
     *,
     forecast_date: pd.Timestamp | str | None = None,
+    next_week: bool = False,
 ) -> pd.Timestamp:
     """Return the week-ending Tuesday to score.
 
-    When ``forecast_date`` is omitted, uses the latest ``date`` in ``panel``.
-    Raises when the requested week has no lane rows.
+    When ``forecast_date`` is omitted:
+
+    - ``next_week=False``: latest ``date`` in ``panel`` (backtest / eval).
+    - ``next_week=True``: the Tuesday immediately after the latest observed week
+      (operational forward forecast — may not yet exist as panel rows).
     """
     if "date" not in panel.columns:
         raise KeyError("panel must include a 'date' column")
 
     dates = pd.to_datetime(panel["date"])
-    if forecast_date is not None:
-        t = pd.Timestamp(forecast_date)
-        if not (dates == t).any():
-            available = sorted(d.date() for d in dates.dropna().unique())
-            raise ValueError(
-                f"No panel rows for forecast date {t.date()}. "
-                f"Available dates: {available[0]} → {available[-1]} ({len(available)} weeks)."
-            )
-        return t
-
     if dates.empty:
         raise ValueError("panel has no dates; cannot resolve forecast week")
-    return pd.Timestamp(dates.max())
+
+    if forecast_date is not None:
+        return pd.Timestamp(forecast_date)
+
+    last = last_observed_date(panel)
+    if next_week:
+        return last + pd.Timedelta(days=7)
+    return last
 
 
 def iter_walk_forward(
